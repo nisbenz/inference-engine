@@ -653,6 +653,7 @@ void GPT2Model::build_graph(
 
     // For now, simplify: use input_ids directly as indices
     // Create a view of wte with the selected rows
+    // Each row is (1, N_EMBD) after reshape
     ggml_tensor* input_embd = nullptr;
     for (int i = 0; i < seq_len; i++) {
         // Get embedding for token input_ids[i]
@@ -665,7 +666,9 @@ void GPT2Model::build_graph(
             input_embd = ggml_concat(ctx_, input_embd, row, 0);
         }
     }
-    // input_embd: (seq_len, N_EMBD)
+    // input_embd: (seq_len * N_EMBD, 1) = (12288, 1) for seq_len=16
+    // Reshape to (seq_len, N_EMBD)
+    input_embd = ggml_reshape_2d(ctx_, input_embd, seq_len, N_EMBD);
 
     // Add positional embeddings
     ggml_tensor* pos_embd = nullptr;
@@ -682,10 +685,17 @@ void GPT2Model::build_graph(
             pos_embd = ggml_concat(ctx_, pos_embd, pos_row, 0);
         }
     }
+    // pos_embd: (seq_len * N_EMBD, 1) = (12288, 1)
+    pos_embd = ggml_reshape_2d(ctx_, pos_embd, seq_len, N_EMBD);
     // pos_embd: (seq_len, N_EMBD)
 
     ggml_tensor* h = ggml_add(ctx_, input_embd, pos_embd);
     // h: (seq_len, N_EMBD)
+    printf("[Debug Model] input_embd ne[0]=%lu ne[1]=%lu, pos_embd ne[0]=%lu ne[1]=%lu, h ne[0]=%lu ne[1]=%lu\n",
+           (unsigned long)input_embd->ne[0], (unsigned long)input_embd->ne[1],
+           (unsigned long)pos_embd->ne[0], (unsigned long)pos_embd->ne[1],
+           (unsigned long)h->ne[0], (unsigned long)h->ne[1]);
+    fflush(stdout);
 
     // Pass through transformer layers
     for (int i = 0; i < N_LAYERS; i++) {
