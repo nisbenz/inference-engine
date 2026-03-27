@@ -103,8 +103,8 @@ bool GPT2Model::init(bool use_gpu) {
         memset(layers_[i].attention.c_proj_weight->data, 0, ggml_nbytes(layers_[i].attention.c_proj_weight));
         memset(layers_[i].attention.c_proj_bias->data, 0, ggml_nbytes(layers_[i].attention.c_proj_bias));
 
-        // Initialize KV cache for this layer
-        layers_[i].attention.init_cache(ctx_);
+        // Initialize KV cache for this layer (disabled for now)
+        // layers_[i].attention.init_cache(ctx_);
 
         // LayerNorm 2
         layers_[i].ln2.gamma = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
@@ -758,7 +758,7 @@ std::vector<int> GPT2Model::generate(
     // First forward pass: process the full prompt to populate KV cache
     // use_cache=true means we'll cache K,V for each layer
     std::cout << "Processing prompt (" << tokens.size() << " tokens)..." << std::endl;
-    forward(tokens, 0, true);  // position=0 for the first token
+    forward(tokens, 0, false);  // position=0 for the first token, disable cache for now
 
     // Subsequent passes: only process the single new token
     // KV cache will be used to attend to all previous tokens
@@ -769,7 +769,7 @@ std::vector<int> GPT2Model::generate(
         std::vector<int> single_token = {tokens.back()};
 
         // Forward pass with single token, use_cache=true to use & update KV cache
-        std::vector<float> logits = forward(single_token, current_position, true);
+        std::vector<float> logits = forward(single_token, current_position, false);  // disable cache for now
 
         // Sample next token (use logits directly - they correspond to the single token)
         int next_token = sample(logits, temperature, top_k);
