@@ -11,7 +11,7 @@
 
 GPT2Model::GPT2Model()
     : ctx_(nullptr)
-    , gf_()
+    , gf_(nullptr)
     , use_gpu_(false)
     , wte_(nullptr)
     , wpe_(nullptr)
@@ -639,20 +639,12 @@ void GPT2Model::build_graph(
     int position,
     bool use_cache
 ) {
-    // Reset computation graph to avoid memory accumulation
-    ggml_graph_clear(&gf_);
+    // Allocate a fresh computation graph with proper size
+    gf_ = ggml_new_graph(ctx_);
 
     int seq_len = input_ids.size();
 
-    // Get token embeddings: wte[input_ids]
-    // wte is (VOCAB_SIZE, N_EMBD), we need to index by input_ids
-    // Result: (seq_len, N_EMBD)
-    ggml_tensor* token_embeddings = ggml_get_rows(ctx_, wte_,
-        ggml_new_tensor_1d(ctx_, GGML_TYPE_I32, seq_len));
-
-    // For now, simplify: use input_ids directly as indices
-    // Create a view of wte with the selected rows
-    // Each row is (1, N_EMBD) after reshape
+    // Build embeddings by selecting rows from wte
     ggml_tensor* input_embd = nullptr;
     for (int i = 0; i < seq_len; i++) {
         // Get embedding for token input_ids[i]
@@ -695,50 +687,33 @@ void GPT2Model::build_graph(
     for (int i = 0; i < N_LAYERS; i++) {
         // position is the sequence position of the FIRST token in input_ids
         // When use_cache=true and seq_len=1 (single new token), position is that token's position
-        h = layers_[i].forward(ctx_, &gf_, h, position, use_cache);
-        ggml_build_forward_expand(&gf_, h);
+        h = layers_[i].forward(ctx_, gf_, h, position, use_cache);
+        ggml_build_forward_expand(gf_, h);
     }
 
     // Final layer norm
     ggml_tensor* h_norm = layer_norm(ctx_, h, ln_f_.gamma, ln_f_.beta, GPT2Config::layer_norm_eps);
-    ggml_build_forward_expand(&gf_, h_norm);
+    ggml_build_forward_expand(gf_, h_norm);
 
     // LM head: lm_head^T @ h_norm
     // lm_head: ne[0]=N_EMBD, ne[1]=VOCAB_SIZE; h_norm: ne[0]=N_EMBD, ne[1]=seq_len
     // ggml_mul_mat(lm_head, h_norm) = lm_head^T @ h_norm
     // Result: ne[0]=VOCAB_SIZE, ne[1]=seq_len
     logits_tensor_ = ggml_mul_mat(ctx_, lm_head_, h_norm);
-    ggml_build_forward_expand(&gf_, logits_tensor_);
+    ggml_build_forward_expand(gf_, logits_tensor_);
 }
 
 void GPT2Model::compute() {
-    // GGML 0.10+ backend API: use best available backend (GPU if available)
-    ggml_backend_t backend = nullptr;
-
-    // Try CUDA backend first
-    if (use_gpu_) {
-        // Try ggml_backend_init_by_name("cuda") first
-        backend = ggml_backend_init_by_name("cuda", NULL);
-        if (!backend) {
-            // Fall back to GPU type
-            backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, NULL);
-        }
-    }
-
-    // Fall back to CPU if GPU not available or disabled
-    if (!backend) {
-        if (use_gpu_) {
-            std::cerr << "GPU backend not available, falling back to CPU" << std::endl;
-        }
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
-    }
+    // Use CPU backend since tensors are allocated in CPU memory (no_alloc=false)
+    // Using GPU backend would require ggml_backend_alloc_ctx_tensors for GPU memory
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
 
     if (!backend) {
-        std::cerr << "Failed to initialize GGML backend" << std::endl;
+        std::cerr << "Failed to initialize GGML CPU backend" << std::endl;
         return;
     }
 
-    ggml_backend_graph_compute(backend, &gf_);
+    ggml_backend_graph_compute(backend, gf_);
     ggml_backend_free(backend);
 }
 

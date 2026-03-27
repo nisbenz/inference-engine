@@ -70,7 +70,7 @@ public:
 private:
     // GGML context and compute graph
     ggml_context* ctx_;
-    ggml_cgraph gf_;
+    ggml_cgraph* gf_;
     bool use_gpu_;
 
     // Model weights (stored as GGML tensors)
