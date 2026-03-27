@@ -1,6 +1,6 @@
 # GPT-2 Inference Engine
 
-A C++/CUDA inference engine for GPT-2 model using `ggml`. This engine can load GPT-2 model in GGUF format and perform text generation.
+A C++ inference engine for GPT-2 model using `ggml`. This engine can load GPT-2 model in GGUF format and perform text generation.
 
 ## 🏗️ Architecture
 
