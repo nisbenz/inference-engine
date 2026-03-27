@@ -1,4 +1,5 @@
 #include "model.hpp"
+#include <ggml-cpu.h>
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -417,11 +418,9 @@ void GPT2Model::build_graph(
 
 void GPT2Model::compute() {
     // Compute the built graph
-    // ggml_graph_compute_with_ctx is the standard GGML compute function
-    ggml_graph_compute_with_ctx(ctx_, &gf_, NULL);
-
-    // Get result - logits tensor should be the last node in the graph
-    // We'll read directly from the tensor data after computation
+    // ggml_graph_compute_with_ctx(ctx, cgraph, n_threads)
+    // n_threads: -1 = all threads, 0 = single thread, >0 = specific count
+    ggml_graph_compute_with_ctx(ctx_, &gf_, -1);
 }
 
 std::vector<int> GPT2Model::generate(
