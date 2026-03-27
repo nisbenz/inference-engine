@@ -261,31 +261,25 @@ ggml_tensor* Attention::forward(
     // For seq_len tokens starting at position, we need a mask that allows each token to attend
     // to positions up to (position + i)
     if (seq_len > 1 || (use_cache && position > 0)) {
-        ggml_tensor* mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, seq_len, total_kv_len);
+        // Create mask with dimensions matching scores: (seq_len * n_heads, n_heads * total_kv_len)
+        ggml_tensor* mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                               seq_len * n_heads, n_heads * total_kv_len);
         float* mask_data = (float*)mask->data;
 
-        for (int i = 0; i < seq_len; i++) {
-            int token_pos = position + i;  // absolute position of token i
-            for (int j = 0; j < total_kv_len; j++) {
-                // Can attend if j < token_pos (i.e., j is before or at current position)
-                // But when j >= position and j < position + seq_len, that's the current chunk
-                // And when j >= position + seq_len... but that shouldn't happen with proper k_seq
-                int kv_pos = j;  // position in the cached/new concatenated k
-                mask_data[i * total_kv_len + j] = (kv_pos > token_pos) ? -10000.0f : 0.0f;
-            }
-        }
-
-        // Expand mask for n_heads: each head gets the same mask
-        ggml_tensor* mask_expanded = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_heads * seq_len, total_kv_len);
-        float* mask_exp = (float*)mask_expanded->data;
         for (int h = 0; h < n_heads; h++) {
             for (int i = 0; i < seq_len; i++) {
+                int token_pos = position + i;  // absolute position of token i
+                int row_offset = (h * seq_len + i) * n_heads * total_kv_len;
+                int col_offset = h * total_kv_len;
                 for (int j = 0; j < total_kv_len; j++) {
-                    mask_exp[(h * seq_len + i) * total_kv_len + j] = mask_data[i * total_kv_len + j];
+                    int kv_pos = j;  // position in the cached/new concatenated k
+                    mask_data[row_offset + col_offset + j] =
+                        (kv_pos > token_pos) ? -10000.0f : 0.0f;
                 }
             }
         }
-        scores = ggml_add(ctx, scores, mask_expanded);
+
+        scores = ggml_add(ctx, scores, mask);
     }
 
     // Softmax over the key dimension
