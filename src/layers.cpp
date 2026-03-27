@@ -21,34 +21,77 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     int seq_len = (int)ggml_nrows(x);
     int n_embd = GPT2Config::n_embd;
 
-    // Compute mean over all elements: sum(x) / (seq_len * n_embd)
-    ggml_tensor* x_sum = ggml_sum(ctx, x);
-    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(seq_len * n_embd));
+    printf("[LayerNorm] START: x ne[0]=%lu ne[1]=%lu, seq_len=%d n_embd=%d\n",
+           (unsigned long)x->ne[0], (unsigned long)x->ne[1], seq_len, n_embd);
+    fflush(stdout);
 
-    // Explicitly repeat x_mean to match x's shape for broadcast
+    // Compute mean over all elements: sum(x) / (seq_len * n_embd)
+    printf("[LayerNorm] Before ggml_sum\n");
+    fflush(stdout);
+    ggml_tensor* x_sum = ggml_sum(ctx, x);
+    printf("[LayerNorm] After ggml_sum: x_sum ne[0]=%lu\n", (unsigned long)x_sum->ne[0]);
+    fflush(stdout);
+
+    printf("[LayerNorm] Before ggml_scale for mean\n");
+    fflush(stdout);
+    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(seq_len * n_embd));
+    printf("[LayerNorm] After ggml_scale for mean: x_mean ne[0]=%lu ne[1]=%lu\n",
+           (unsigned long)x_mean->ne[0], (unsigned long)x_mean->ne[1]);
+    fflush(stdout);
+
+    printf("[LayerNorm] Before ggml_repeat for x_mean broadcast\n");
+    fflush(stdout);
     ggml_tensor* x_mean_broadcast = ggml_repeat(ctx, x_mean, x);
+    printf("[LayerNorm] After ggml_repeat x_mean: ne[0]=%lu ne[1]=%lu\n",
+           (unsigned long)x_mean_broadcast->ne[0], (unsigned long)x_mean_broadcast->ne[1]);
+    fflush(stdout);
 
     // Compute x - mean
+    printf("[LayerNorm] Before ggml_sub x - x_mean_broadcast\n");
+    fflush(stdout);
     ggml_tensor* x_centered = ggml_sub(ctx, x, x_mean_broadcast);
+    printf("[LayerNorm] After ggml_sub\n");
+    fflush(stdout);
 
     // Compute variance: mean((x - mean)^2)
+    printf("[LayerNorm] Before ggml_sqr\n");
+    fflush(stdout);
     ggml_tensor* x_centered_sq = ggml_sqr(ctx, x_centered);
+    printf("[LayerNorm] Before ggml_sum for variance\n");
+    fflush(stdout);
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
+    printf("[LayerNorm] Before ggml_scale for variance\n");
+    fflush(stdout);
     ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(seq_len * n_embd));
 
-    // Explicitly repeat variance to match x's shape
+    printf("[LayerNorm] Before ggml_repeat for variance broadcast\n");
+    fflush(stdout);
     ggml_tensor* variance_broadcast = ggml_repeat(ctx, variance, x);
+    printf("[LayerNorm] After ggml_repeat variance\n");
+    fflush(stdout);
 
     // Compute sqrt(var + eps)
+    printf("[LayerNorm] Before ggml_add var + eps\n");
+    fflush(stdout);
     ggml_tensor* var_eps = ggml_add(ctx, variance_broadcast, ggml_new_scalar(ctx, GPT2Config::layer_norm_eps));
+    printf("[LayerNorm] Before ggml_sqrt\n");
+    fflush(stdout);
     ggml_tensor* std = ggml_sqrt(ctx, var_eps);
+    printf("[LayerNorm] Before ggml_div\n");
+    fflush(stdout);
 
     // Normalize: (x - mean) / std
     ggml_tensor* x_norm = ggml_div(ctx, x_centered, std);
+    printf("[LayerNorm] Before ggml_mul with gamma\n");
+    fflush(stdout);
 
     // Scale and shift: gamma * x_norm + beta
     ggml_tensor* scaled = ggml_mul(ctx, x_norm, gamma);
+    printf("[LayerNorm] Before ggml_add with beta\n");
+    fflush(stdout);
     ggml_tensor* result = ggml_add(ctx, scaled, beta);
+    printf("[LayerNorm] END\n");
+    fflush(stdout);
     return result;
 }
 
