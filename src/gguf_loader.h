@@ -28,6 +28,8 @@ enum GGUF_TYPE_ID {
     GGUF_TID_I32 = 19,
     GGUF_TID_I64 = 20,
     GGUF_TID_F64 = 21,
+    // Extended types (for compatibility with some GGML forks)
+    GGUF_TID_Q8_0_ALT = 30,  // Q8_0 variant used by some converters
 };
 
 // GGUF Metadata Value Types (renamed to avoid conflict with GGML's gguf_type)
