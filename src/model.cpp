@@ -379,7 +379,8 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
             }
 
             // GGUF blk.X patterns (llama.cpp style)
-            else if (t.name.find(".blk.") != std::string::npos) {
+            // Handle both ".blk." (prefixed) and "blk." (starting) patterns
+            else if (t.name.find("blk.") != std::string::npos) {
                 size_t layer_idx = extract_layer_idx(t.name);
                 if (layer_idx < N_LAYERS) {
                     if (t.name.find(".attn_qkv.weight") != std::string::npos) {
@@ -415,7 +416,7 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                 size_t expected_nbytes = ggml_nbytes(dst);
                 size_t actual_nbytes = gguf_tensor_nbytes(t);
 
-                if (expected_nbytes == actual_nbytes || t.type == GGUF_TID_Q4_K || t.type == GGUF_TID_Q8_0_ALT) {
+                if (expected_nbytes == actual_nbytes || t.type == GGUF_TID_Q4_K || t.type == GGUF_TID_Q8_0_ALT || t.type == GGUF_TID_BF16 || t.type == GGUF_TID_F16) {
                     // Type matches or quantized (will be handled separately)
                     if (t.type == GGUF_TID_F32) {
                         read_tensor_data(gguf, t, dst->data, actual_nbytes);
