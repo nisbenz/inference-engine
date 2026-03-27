@@ -6,9 +6,10 @@
 #include <cmath>
 
 // GPT-2 tokenizer regex pattern
-// Matches: 's, 't, 're, 've, 'm, 'll, 'd | letters | numbers | punctuation | whitespace
+// Matches: contractions | ASCII letters | numbers | punctuation | whitespace
+// Using POSIX character classes for C++ regex compatibility
 static const char* GPT2_REGEX_PATTERN =
-    R"('s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)";
+    R"('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:space:][[:alnum:]]]+|[[:space:]]+)";
 
 GPT2Tokenizer::GPT2Tokenizer() {
     // GPT-2 byte-level BPE uses 50257 tokens (256 byte tokens + 50k merged)
