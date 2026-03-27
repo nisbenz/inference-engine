@@ -54,19 +54,19 @@ size_t gguf_tensor_nbytes(const GGUFTensorInfo& info) {
 static GGUFValue read_metadata_value(FILE* fp, GGUFMetadataValueType type) {
     GGUFValue val; val.type = type;
     switch (type) {
-        case GGUF_TYPE_UINT8:   val.u8  = read_val<uint8_t>(fp);  break;
-        case GGUF_TYPE_INT8:    val.i8  = read_val<int8_t>(fp);   break;
-        case GGUF_TYPE_UINT16:  val.u16 = read_val<uint16_t>(fp); break;
-        case GGUF_TYPE_INT16:   val.i16 = read_val<int16_t>(fp);  break;
-        case GGUF_TYPE_UINT32:  val.u32 = read_val<uint32_t>(fp); break;
-        case GGUF_TYPE_INT32:   val.i32 = read_val<int32_t>(fp);  break;
-        case GGUF_TYPE_FLOAT32: val.f32 = read_val<float>(fp);    break;
-        case GGUF_TYPE_BOOL:    val.b   = read_val<uint8_t>(fp);  break;
-        case GGUF_TYPE_STRING:   val.str = read_gguf_string(fp);   break;
-        case GGUF_TYPE_UINT64:  val.u64 = read_val<uint64_t>(fp); break;
-        case GGUF_TYPE_INT64:   val.i64 = read_val<int64_t>(fp);  break;
-        case GGUF_TYPE_FLOAT64: val.f64 = read_val<double>(fp);   break;
-        case GGUF_TYPE_ARRAY: {
+        case MY_GGUF_TYPE_UINT8:   val.u8  = read_val<uint8_t>(fp);  break;
+        case MY_GGUF_TYPE_INT8:    val.i8  = read_val<int8_t>(fp);   break;
+        case MY_GGUF_TYPE_UINT16:  val.u16 = read_val<uint16_t>(fp); break;
+        case MY_GGUF_TYPE_INT16:   val.i16 = read_val<int16_t>(fp);  break;
+        case MY_GGUF_TYPE_UINT32:  val.u32 = read_val<uint32_t>(fp); break;
+        case MY_GGUF_TYPE_INT32:   val.i32 = read_val<int32_t>(fp);  break;
+        case MY_GGUF_TYPE_FLOAT32: val.f32 = read_val<float>(fp);    break;
+        case MY_GGUF_TYPE_BOOL:    val.b   = read_val<uint8_t>(fp);  break;
+        case MY_GGUF_TYPE_STRING:   val.str = read_gguf_string(fp);   break;
+        case MY_GGUF_TYPE_UINT64:  val.u64 = read_val<uint64_t>(fp); break;
+        case MY_GGUF_TYPE_INT64:   val.i64 = read_val<int64_t>(fp);  break;
+        case MY_GGUF_TYPE_FLOAT64: val.f64 = read_val<double>(fp);   break;
+        case MY_GGUF_TYPE_ARRAY: {
             GGUFMetadataValueType arr_type = read_val<GGUFMetadataValueType>(fp);
             uint64_t arr_len = read_val<uint64_t>(fp);
             val.arr_type = arr_type;

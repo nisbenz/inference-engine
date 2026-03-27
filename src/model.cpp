@@ -622,7 +622,7 @@ void GPT2Model::compute() {
     // Try CUDA backend first
     if (use_gpu_) {
         // Try ggml_backend_init_by_name("cuda") first
-        backend = ggml_backend_init_by_name("cuda");
+        backend = ggml_backend_init_by_name("cuda", NULL);
         if (!backend) {
             // Fall back to GPU type
             backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, NULL);

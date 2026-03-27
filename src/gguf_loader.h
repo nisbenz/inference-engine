@@ -30,21 +30,21 @@ enum GGUF_TYPE_ID {
     GGUF_TID_F64 = 21,
 };
 
-// GGUF Metadata Value Types
+// GGUF Metadata Value Types (renamed to avoid conflict with GGML's gguf_type)
 enum GGUFMetadataValueType {
-    GGUF_TYPE_UINT8 = 0,
-    GGUF_TYPE_INT8 = 1,
-    GGUF_TYPE_UINT16 = 2,
-    GGUF_TYPE_INT16 = 3,
-    GGUF_TYPE_UINT32 = 4,
-    GGUF_TYPE_INT32 = 5,
-    GGUF_TYPE_FLOAT32 = 6,
-    GGUF_TYPE_BOOL = 7,
-    GGUF_TYPE_STRING = 8,
-    GGUF_TYPE_ARRAY = 9,
-    GGUF_TYPE_UINT64 = 10,
-    GGUF_TYPE_INT64 = 11,
-    GGUF_TYPE_FLOAT64 = 12,
+    MY_GGUF_TYPE_UINT8 = 0,
+    MY_GGUF_TYPE_INT8 = 1,
+    MY_GGUF_TYPE_UINT16 = 2,
+    MY_GGUF_TYPE_INT16 = 3,
+    MY_GGUF_TYPE_UINT32 = 4,
+    MY_GGUF_TYPE_INT32 = 5,
+    MY_GGUF_TYPE_FLOAT32 = 6,
+    MY_GGUF_TYPE_BOOL = 7,
+    MY_GGUF_TYPE_STRING = 8,
+    MY_GGUF_TYPE_ARRAY = 9,
+    MY_GGUF_TYPE_UINT64 = 10,
+    MY_GGUF_TYPE_INT64 = 11,
+    MY_GGUF_TYPE_FLOAT64 = 12,
 };
 
 // GGUF Value union for metadata
@@ -66,7 +66,7 @@ struct GGUFValue {
     std::string str;
     GGUFMetadataValueType arr_type;
     std::vector<GGUFValue> arr;
-    GGUFValue() : type(GGUF_TYPE_UINT8), u64(0) {}
+    GGUFValue() : type(MY_GGUF_TYPE_UINT8), u64(0) {}
 };
 
 // Tensor info
@@ -91,7 +91,7 @@ struct GGUFFile {
     // Helper to get metadata values
     std::string get_str(const std::string& key, const std::string& default_val = "") {
         auto it = metadata.find(key);
-        if (it != metadata.end() && it->second.type == GGUF_TYPE_STRING) {
+        if (it != metadata.end() && it->second.type == MY_GGUF_TYPE_STRING) {
             return it->second.str;
         }
         return default_val;
@@ -99,7 +99,7 @@ struct GGUFFile {
 
     uint32_t get_u32(const std::string& key, uint32_t default_val = 0) {
         auto it = metadata.find(key);
-        if (it != metadata.end() && it->second.type == GGUF_TYPE_UINT32) {
+        if (it != metadata.end() && it->second.type == MY_GGUF_TYPE_UINT32) {
             return it->second.u32;
         }
         return default_val;
@@ -109,8 +109,8 @@ struct GGUFFile {
         auto it = metadata.find(key);
         if (it != metadata.end()) {
             switch (it->second.type) {
-                case GGUF_TYPE_UINT32: return it->second.u32;
-                case GGUF_TYPE_INT32: return (uint32_t)it->second.i32;
+                case MY_GGUF_TYPE_UINT32: return it->second.u32;
+                case MY_GGUF_TYPE_INT32: return (uint32_t)it->second.i32;
                 default: break;
             }
         }
@@ -119,7 +119,7 @@ struct GGUFFile {
 
     int32_t get_i32(const std::string& key, int32_t default_val = 0) {
         auto it = metadata.find(key);
-        if (it != metadata.end() && it->second.type == GGUF_TYPE_INT32) {
+        if (it != metadata.end() && it->second.type == MY_GGUF_TYPE_INT32) {
             return it->second.i32;
         }
         return default_val;
@@ -127,7 +127,7 @@ struct GGUFFile {
 
     float get_f32(const std::string& key, float default_val = 0.0f) {
         auto it = metadata.find(key);
-        if (it != metadata.end() && it->second.type == GGUF_TYPE_FLOAT32) {
+        if (it != metadata.end() && it->second.type == MY_GGUF_TYPE_FLOAT32) {
             return it->second.f32;
         }
         return default_val;
@@ -135,7 +135,7 @@ struct GGUFFile {
 
     bool get_bool(const std::string& key, bool default_val = false) {
         auto it = metadata.find(key);
-        if (it != metadata.end() && it->second.type == GGUF_TYPE_BOOL) {
+        if (it != metadata.end() && it->second.type == MY_GGUF_TYPE_BOOL) {
             return it->second.b;
         }
         return default_val;
@@ -143,7 +143,7 @@ struct GGUFFile {
 
     int64_t get_i64(const std::string& key, int64_t default_val = 0) {
         auto it = metadata.find(key);
-        if (it != metadata.end() && it->second.type == GGUF_TYPE_INT64) {
+        if (it != metadata.end() && it->second.type == MY_GGUF_TYPE_INT64) {
             return it->second.i64;
         }
         return default_val;
