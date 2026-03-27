@@ -233,93 +233,106 @@ ggml_tensor* Attention::forward(
 
     // Now k and v are (total_kv_len, n_heads, head_dim)
     // q is (seq_len, n_heads, head_dim)
+    //
+    // Correct multi-head attention: each head computes independently
+    // For head h:
+    //   Q_h = q[:, h, :]     -> (seq_len, head_dim)
+    //   K_h = k[:, h, :]     -> (total_kv_len, head_dim)
+    //   V_h = v[:, h, :]     -> (total_kv_len, head_dim)
+    //   scores_h = Q_h @ K_h^T / sqrt(head_dim)  -> (seq_len, total_kv_len)
+    //   scores_h = mask(scores_h)
+    //   attn_h = softmax(scores_h) @ V_h  -> (seq_len, head_dim)
+    // Output = concat all heads -> (seq_len, n_heads, head_dim)
 
-    // Reshape q for matmul: (seq_len, n_heads, head_dim) -> (seq_len * n_heads, head_dim)
-    ggml_tensor* q_2d = ggml_reshape_2d(ctx, q, seq_len * n_heads, head_dim);
+    // Allocate output tensor: (seq_len, n_heads, head_dim)
+    ggml_tensor* attn_out = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, seq_len, n_heads, head_dim);
 
-    // Reshape k for matmul: (total_kv_len, n_heads, head_dim) -> (n_heads, total_kv_len, head_dim)
-    k = ggml_reshape_3d(ctx, k, n_heads, total_kv_len, head_dim);
-    printf("[Debug Attn] k after reshape_3d: ne[0]=%lu, ne[1]=%lu, ne[2]=%lu, n_dims=%d\n",
-           (unsigned long)k->ne[0], (unsigned long)k->ne[1], (unsigned long)k->ne[2], k->n_dims);
-    // Transpose to (n_heads, head_dim, total_kv_len)
-    k = ggml_transpose(ctx, k);
-    printf("[Debug Attn] k after transpose: ne[0]=%lu, ne[1]=%lu, ne[2]=%lu, n_dims=%d\n",
-           (unsigned long)k->ne[0], (unsigned long)k->ne[1], (unsigned long)k->ne[2], k->n_dims);
-    // Reshape to (head_dim, n_heads * total_kv_len)
-    ggml_tensor* k_mat = ggml_reshape_2d(ctx, k, head_dim, n_heads * total_kv_len);
-    printf("[Debug Attn] k_mat: ne[0]=%lu, ne[1]=%lu, n_dims=%d\n",
-           (unsigned long)k_mat->ne[0], (unsigned long)k_mat->ne[1], k_mat->n_dims);
+    // Loop over each head
+    for (int h = 0; h < n_heads; h++) {
+        // Extract head h from q: need to view q as (seq_len, n_heads, head_dim)
+        // then take plane h along dim1 (n_heads)
 
-    // Similar for v: (total_kv_len, n_heads, head_dim) -> (n_heads * total_kv_len, head_dim)
-    v = ggml_reshape_3d(ctx, v, n_heads, total_kv_len, head_dim);
-    v = ggml_transpose(ctx, v);  // (head_dim, n_heads, total_kv_len)
-    ggml_tensor* v_mat = ggml_reshape_2d(ctx, v, head_dim, n_heads * total_kv_len);
-    v_mat = ggml_transpose(ctx, v_mat);  // (n_heads * total_kv_len, head_dim)
+        // q is (seq_len, n_heads, head_dim)
+        // View q as (n_heads, seq_len, head_dim) by permuting dims 1 and 2... wait no
+        // q dims: ne[0]=seq_len, ne[1]=n_heads, ne[2]=head_dim
 
-    // Compute attention scores: q_2d @ k_mat
-    // (seq_len * n_heads, head_dim) @ (head_dim, n_heads * total_kv_len)
-    // = (seq_len * n_heads, n_heads * total_kv_len)
-    printf("[Debug Attn] seq_len=%d, n_heads=%d, head_dim=%d, total_kv_len=%d, position=%d\n",
-           seq_len, n_heads, head_dim, total_kv_len, position);
-    printf("[Debug Attn] q_2d: ne[0]=%lu, ne[1]=%lu, n_dims=%d\n", (unsigned long)q_2d->ne[0], (unsigned long)q_2d->ne[1], q_2d->n_dims);
-    printf("[Debug Attn] k_mat: ne[0]=%lu, ne[1]=%lu, n_dims=%d\n", (unsigned long)k_mat->ne[0], (unsigned long)k_mat->ne[1], k_mat->n_dims);
-    ggml_tensor* scores = ggml_mul_mat(ctx, q_2d, k_mat);
-    printf("[Debug Attn] SCORES after mul_mat: ne[0]=%lu, ne[1]=%lu, ne[2]=%lu, n_dims=%d\n",
-           (unsigned long)scores->ne[0], (unsigned long)scores->ne[1],
-           (unsigned long)scores->ne[2], scores->n_dims);
-    scores = ggml_scale(ctx, scores, 1.0f / std::sqrt((float)head_dim));
+        // For head h: we want Q_h[i,k] = q[i, h, k]
+        // Using view with strides:
+        // q row stride = n_heads * head_dim
+        // q col stride = head_dim
+        // So q[i,h,k] = q_data[i * n_heads * head_dim + h * head_dim + k]
 
-    // Apply causal mask: for token i, can only attend to positions 0..i in the full sequence
-    if (seq_len > 1 || (use_cache && position > 0)) {
-        // scores shape: (seq_len * n_heads, n_heads * total_kv_len)
-        // scores[row=h*seq_len+i, col=h*total_kv_len+j] represents head h, token i attending to key position j
-        // We want to mask where j > position + i (future positions)
-        ggml_tensor* mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                               seq_len * n_heads, n_heads * total_kv_len);
-        float* mask_data = (float*)mask->data;
+        // Extract Q_h: view with stride skipping other heads
+        ggml_tensor* q_h = ggml_view_2d(ctx, q,
+                                        seq_len, head_dim,
+                                        n_heads * head_dim * sizeof(float),  // stride in dim0 (rows)
+                                        h * head_dim * sizeof(float));        // offset for head h
 
-        // GGML uses column-major memory layout
-        // mask[col * n_rows + row] = value
-        for (int h = 0; h < n_heads; h++) {
-            for (int i = 0; i < seq_len; i++) {
-                int token_pos = position + i;  // absolute position of token i
-                int row = h * seq_len + i;
-                for (int j = 0; j < total_kv_len; j++) {
-                    int col = h * total_kv_len + j;
-                    // column-major: index = row + col * n_rows
-                    size_t idx = row + col * (seq_len * n_heads);
-                    mask_data[idx] = (j > token_pos) ? -10000.0f : 0.0f;
-                }
+        // Extract K_h: similar from k which is (total_kv_len, n_heads, head_dim)
+        ggml_tensor* k_h = ggml_view_2d(ctx, k,
+                                        total_kv_len, head_dim,
+                                        n_heads * head_dim * sizeof(float),
+                                        h * head_dim * sizeof(float));
+
+        // Extract V_h: similar from v
+        ggml_tensor* v_h = ggml_view_2d(ctx, v,
+                                        total_kv_len, head_dim,
+                                        n_heads * head_dim * sizeof(float),
+                                        h * head_dim * sizeof(float));
+
+        // Compute scores_h = Q_h @ K_h^T
+        // Q_h: (seq_len, head_dim)
+        // K_h^T: (head_dim, total_kv_len)
+        // scores_h: (seq_len, total_kv_len)
+        ggml_tensor* k_h_T = ggml_transpose(ctx, k_h);
+        ggml_tensor* scores_h = ggml_mul_mat(ctx, q_h, k_h_T);
+
+        // Scale by 1/sqrt(head_dim)
+        scores_h = ggml_scale(ctx, scores_h, 1.0f / std::sqrt((float)head_dim));
+
+        // Apply causal mask for this head
+        // scores_h[i, j] = how query at position (position+i) attends to key at position j
+        // Mask where j > position + i
+        ggml_tensor* mask_h = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, seq_len, total_kv_len);
+        float* mask_data = (float*)mask_h->data;
+
+        for (int i = 0; i < seq_len; i++) {
+            int token_pos = position + i;
+            for (int j = 0; j < total_kv_len; j++) {
+                // column-major index
+                size_t idx = i + j * seq_len;
+                mask_data[idx] = (j > token_pos) ? -10000.0f : 0.0f;
             }
         }
 
-        printf("[Debug Attn] mask: ne[0]=%lu, ne[1]=%lu, n_dims=%d\n",
-               (unsigned long)mask->ne[0], (unsigned long)mask->ne[1], mask->n_dims);
-        printf("[Debug Attn] scores pre-add: ne[0]=%lu, ne[1]=%lu, n_dims=%d\n",
-               (unsigned long)scores->ne[0], (unsigned long)scores->ne[1], scores->n_dims);
-        scores = ggml_add(ctx, scores, mask);
+        scores_h = ggml_add(ctx, scores_h, mask_h);
+
+        // Softmax over key dimension
+        ggml_tensor* attn_h = ggml_soft_max(ctx, scores_h);
+
+        // Compute output_h = attn_h @ V_h
+        // attn_h: (seq_len, total_kv_len)
+        // V_h: (total_kv_len, head_dim)
+        // output_h: (seq_len, head_dim)
+        ggml_tensor* output_h = ggml_mul_mat(ctx, attn_h, v_h);
+
+        // Copy output_h into the corresponding head in attn_out
+        // attn_out is (seq_len, n_heads, head_dim)
+        // We want attn_out[:, h, :] = output_h
+        ggml_tensor* out_h = ggml_view_2d(ctx, attn_out,
+                                          seq_len, head_dim,
+                                          n_heads * head_dim * sizeof(float),
+                                          h * head_dim * sizeof(float));
+        ggml_tensor* copy_h = ggml_cpy(ctx, output_h, out_h);
+        ggml_build_forward_expand(gf, copy_h);
     }
 
-    printf("[Debug Attn] scores ne[0]=%lu ne[1]=%lu ne[2]=%lu ne[3]=%lu\n",
-           (unsigned long)scores->ne[0], (unsigned long)scores->ne[1],
-           (unsigned long)scores->ne[2], (unsigned long)scores->ne[3]);
-    printf("[Debug Attn] scores n_dims=%d\n", scores->n_dims);
-    fflush(stdout);
-
-    // Softmax over the key dimension
-    ggml_tensor* attn_weights = ggml_soft_max(ctx, scores);
-
-    // Apply attention: attn_weights @ v_mat
-    // (seq_len * n_heads, n_heads * total_kv_len) @ (n_heads * total_kv_len, head_dim)
-    // = (seq_len * n_heads, head_dim)
-    ggml_tensor* attn_out = ggml_mul_mat(ctx, attn_weights, v_mat);
-
-    // Reshape back to (seq_len, n_heads, head_dim) then (seq_len, n_embd)
-    attn_out = ggml_reshape_3d(ctx, attn_out, seq_len, n_heads, head_dim);
-    attn_out = ggml_transpose(ctx, attn_out);  // (seq_len, head_dim, n_heads)
+    // Now attn_out is (seq_len, n_heads, head_dim) = (seq_len, 12, 64)
+    // Reshape to (seq_len, n_embd) = (seq_len, 768) for output projection
+    // Memory layout: [i, h, k] maps to [i, h*head_dim + k]
     attn_out = ggml_reshape_2d(ctx, attn_out, seq_len, n_embd);
 
-    // Output projection
+    // Output projection: (seq_len, n_embd) @ (n_embd, n_embd) = (seq_len, n_embd)
     ggml_tensor* out = ggml_mul_mat(ctx, attn_out, c_proj_weight);
     out = ggml_add(ctx, out, c_proj_bias);
 
