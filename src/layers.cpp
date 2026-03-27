@@ -282,6 +282,9 @@ ggml_tensor* Attention::forward(
         scores = ggml_add(ctx, scores, mask);
     }
 
+    printf("[Debug Attn] scores ne[0]=%lu ne[1]=%lu\n", (unsigned long)scores->ne[0], (unsigned long)scores->ne[1]);
+    fflush(stdout);
+
     // Softmax over the key dimension
     ggml_tensor* attn_weights = ggml_soft_max(ctx, scores);
 
