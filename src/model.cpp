@@ -9,6 +9,7 @@
 
 GPT2Model::GPT2Model()
     : ctx_(nullptr)
+    , gf_()
     , use_gpu_(false)
     , wte_(nullptr)
     , wpe_(nullptr)
@@ -33,9 +34,11 @@ GPT2Model::~GPT2Model() {
 bool GPT2Model::init(bool use_gpu) {
     use_gpu_ = use_gpu;
 
+    std::cerr << "[DEBUG] init: starting with use_gpu=" << use_gpu << std::endl;
+
     // Initialize GGML
     struct ggml_init_params params = {
-        .mem_size   = static_cast<size_t>(512) * 1024 * 1024,  // 512 MB
+        .mem_size   = static_cast<size_t>(1024) * 1024 * 1024,  // 1 GB
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };
@@ -45,20 +48,24 @@ bool GPT2Model::init(bool use_gpu) {
         std::cerr << "Failed to initialize GGML context" << std::endl;
         return false;
     }
+    std::cerr << "[DEBUG] init: ggml_init done" << std::endl;
 
     // Initialize KV cache
     kv_cache_.init(ctx_);
+    std::cerr << "[DEBUG] init: kv_cache_.init done" << std::endl;
 
     // Allocate model weights (will be filled by load_weights)
-    // wte: (VOCAB_SIZE, N_EMBD) = (50257, 1280)
+    // wte: (VOCAB_SIZE, N_EMBD) = (50257, 768)
     wte_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, VOCAB_SIZE);
     ggml_set_name(wte_, "wte");
     memset(wte_->data, 0, ggml_nbytes(wte_));
+    std::cerr << "[DEBUG] init: wte_ allocated (" << ggml_nbytes(wte_) << " bytes)" << std::endl;
 
-    // wpe: (CONTEXT_LENGTH, N_EMBD) = (1024, 1280)
+    // wpe: (CONTEXT_LENGTH, N_EMBD) = (1024, 768)
     wpe_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, CONTEXT_LENGTH);
     ggml_set_name(wpe_, "wpe");
     memset(wpe_->data, 0, ggml_nbytes(wpe_));
+    std::cerr << "[DEBUG] init: wpe_ allocated (" << ggml_nbytes(wpe_) << " bytes)" << std::endl;
 
     // Final layer norm gamma and beta
     ln_f_.gamma = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
@@ -245,12 +252,14 @@ bool GPT2Model::load_huggingface_weights(const std::string& path) {
 
 bool GPT2Model::load_gguf_weights(const std::string& path) {
     std::cout << "Loading GGUF model from: " << path << std::endl;
+    std::cerr << "[DEBUG] load_gguf_weights: starting" << std::endl;
 
     // For now, use random initialization since GGUF loading API varies by version
     // The actual tensor loading from GGUF requires matching the exact GGML/GGUF API version
     std::cout << "Note: Using random initialization (GGUF loading requires API version check)" << std::endl;
 
     // Random initialization for testing
+    std::cerr << "[DEBUG] load_gguf_weights: starting random init" << std::endl;
     std::random_device rd;
     std::mt19937 gen(42);
     std::uniform_real_distribution<float> dist(-0.1f, 0.1f);
@@ -329,14 +338,17 @@ std::vector<float> GPT2Model::forward(
         return std::vector<float>();
     }
 
-    // Build computation graph
-    build_graph(input_ids, position, use_cache);
-
-    // Compute
-    compute();
-
-    // Return logits
-    return std::vector<float>(logits_data_, logits_data_ + VOCAB_SIZE);
+    // Skip graph building for now since compute() is a placeholder
+    // Just return random logits to verify pipeline works
+    // TODO: implement proper GGML graph computation
+    std::vector<float> logits(VOCAB_SIZE);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    for (int i = 0; i < VOCAB_SIZE; i++) {
+        logits[i] = dist(gen);
+    }
+    return logits;
 }
 
 void GPT2Model::build_graph(
@@ -409,8 +421,9 @@ void GPT2Model::build_graph(
 }
 
 void GPT2Model::compute() {
+    // Placeholder - actual computation requires proper GGML backend
     // Graph is already built via ggml_build_forward_expand calls in build_graph
-    // This is a placeholder - actual computation requires proper GGML backend
+    ggml_graph_clear(&gf_);
 }
 
 std::vector<int> GPT2Model::generate(
