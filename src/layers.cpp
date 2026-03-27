@@ -144,7 +144,8 @@ ggml_tensor* Attention::forward(
     // Then GGML matmul gives (seq_len, 3*n_embd) = (16, 2304)
 
     ggml_tensor* x_t = ggml_transpose(ctx, x);
-    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x_t, x->ne[1], x->ne[0]); // (n_embd, seq_len)
+    ggml_tensor* x_cont = ggml_cont(ctx, x_t);
+    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x_cont, x->ne[1], x->ne[0]); // (n_embd, seq_len)
     ggml_tensor* w_reshaped = ggml_reshape_2d(ctx, c_attn_weight, c_attn_weight->ne[0], c_attn_weight->ne[1]); // (n_embd, 3*n_embd)
 
     ggml_tensor* qkv = ggml_mul_mat(ctx, x_reshaped, w_reshaped);
@@ -250,7 +251,8 @@ ggml_tensor* Attention::forward(
     // Output projection: (seq_len, n_embd) @ (n_embd, n_embd) = (seq_len, n_embd)
     // For GGML matmul: transpose attn_out to (n_embd, seq_len)
     ggml_tensor* attn_out_t = ggml_transpose(ctx, attn_out);
-    ggml_tensor* attn_out_reshaped = ggml_reshape_2d(ctx, attn_out_t, attn_out->ne[1], attn_out->ne[0]); // (n_embd, seq_len)
+    ggml_tensor* attn_out_cont = ggml_cont(ctx, attn_out_t);
+    ggml_tensor* attn_out_reshaped = ggml_reshape_2d(ctx, attn_out_cont, attn_out->ne[1], attn_out->ne[0]); // (n_embd, seq_len)
     ggml_tensor* proj_reshaped = ggml_reshape_2d(ctx, c_proj_weight, c_proj_weight->ne[0], c_proj_weight->ne[1]); // (n_embd, n_embd)
 
     ggml_tensor* out = ggml_mul_mat(ctx, attn_out_reshaped, proj_reshaped);
@@ -297,7 +299,8 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // After GGML matmul: (seq_len, n_ffn)
 
     ggml_tensor* x_t = ggml_transpose(ctx, x);
-    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x_t, x->ne[1], x->ne[0]); // (n_embd, seq_len)
+    ggml_tensor* x_cont = ggml_cont(ctx, x_t);
+    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x_cont, x->ne[1], x->ne[0]); // (n_embd, seq_len)
 
     ggml_tensor* up_reshaped = ggml_reshape_2d(ctx, c_fc_weight, c_fc_weight->ne[0], c_fc_weight->ne[1]); // (n_embd, n_ffn)
     ggml_tensor* up = ggml_mul_mat(ctx, x_reshaped, up_reshaped);
@@ -310,7 +313,8 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
 
     // down_proj: (n_ffn, n_embd)
     ggml_tensor* activated_t = ggml_transpose(ctx, activated);
-    ggml_tensor* activated_reshaped = ggml_reshape_2d(ctx, activated_t, activated->ne[1], activated->ne[0]); // (n_ffn, seq_len)
+    ggml_tensor* activated_cont = ggml_cont(ctx, activated_t);
+    ggml_tensor* activated_reshaped = ggml_reshape_2d(ctx, activated_cont, activated->ne[1], activated->ne[0]); // (n_ffn, seq_len)
 
     ggml_tensor* down_reshaped = ggml_reshape_2d(ctx, c_proj_weight, c_proj_weight->ne[0], c_proj_weight->ne[1]); // (n_ffn, n_embd)
     ggml_tensor* down = ggml_mul_mat(ctx, activated_reshaped, down_reshaped);
