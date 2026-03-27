@@ -287,8 +287,13 @@ ggml_tensor* Attention::forward(
         // Q_h: (seq_len, head_dim) -> transpose to (head_dim, seq_len) for GGML
         // K_h^T: (head_dim, total_kv_len) -> has same ne[0] = head_dim
         // For GGML matmul: need same ne[0] on both tensors
-        ggml_tensor* q_h_t = ggml_transpose(ctx, q_h);  // (head_dim, seq_len)
-        ggml_tensor* k_h_T = ggml_transpose(ctx, k_h);   // (head_dim, total_kv_len)
+        // q_h, k_h are views with custom strides (non-contiguous), make them contiguous first
+        ggml_tensor* q_h_cont = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, seq_len, head_dim);
+        q_h_cont = ggml_cpy(ctx, q_h, q_h_cont);
+        ggml_tensor* k_h_cont = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, total_kv_len, head_dim);
+        k_h_cont = ggml_cpy(ctx, k_h, k_h_cont);
+        ggml_tensor* q_h_t = ggml_transpose(ctx, q_h_cont);  // (head_dim, seq_len)
+        ggml_tensor* k_h_T = ggml_transpose(ctx, k_h_cont);   // (head_dim, total_kv_len)
         // GGML result: (seq_len, total_kv_len) = {q_h_t.ne[1], k_h_T.ne[1]}
         ggml_tensor* scores_h = ggml_mul_mat(ctx, q_h_t, k_h_T);
 
@@ -321,7 +326,10 @@ ggml_tensor* Attention::forward(
         // For GGML: need same ne[0], so transpose attn_h to (total_kv_len, seq_len)
         // GGML result: (seq_len, head_dim)
         ggml_tensor* attn_h_t = ggml_transpose(ctx, attn_h);
-        ggml_tensor* v_h_reshaped = ggml_reshape_2d(ctx, v_h, v_h->ne[0], v_h->ne[1]); // (total_kv_len, head_dim)
+        // v_h is a view with custom strides (non-contiguous), need to copy to contiguous tensor
+        ggml_tensor* v_h_cont = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, total_kv_len, head_dim);
+        v_h_cont = ggml_cpy(ctx, v_h, v_h_cont);
+        ggml_tensor* v_h_reshaped = ggml_reshape_2d(ctx, v_h_cont, v_h_cont->ne[0], v_h_cont->ne[1]); // (total_kv_len, head_dim)
 
         // GGML matmul: (total_kv_len, seq_len) @ (total_kv_len, head_dim) = (seq_len, head_dim)
         ggml_tensor* output_h = ggml_mul_mat(ctx, attn_h_t, v_h_reshaped);
