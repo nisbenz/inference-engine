@@ -45,19 +45,22 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     // x_norm is 1D, make contiguous then reshape to 2D
     ggml_tensor* x_norm_cont = ggml_cont(ctx, x_norm);
     ggml_tensor* x_norm_2d = ggml_reshape_2d(ctx, x_norm_cont, n_rows, n_cols);
+    fprintf(stderr, "DEBUG LN: x_norm_2d (%ld, %ld)\n", x_norm_2d->ne[0], x_norm_2d->ne[1]);
 
     // gamma and beta are (n_cols,), reshape to (1, n_cols) for broadcasting
     ggml_tensor* gamma_cont = ggml_cont(ctx, gamma);
     ggml_tensor* gamma_2d = ggml_reshape_2d(ctx, gamma_cont, 1, n_cols);
+    fprintf(stderr, "DEBUG LN: gamma_2d (%ld, %ld)\n", gamma_2d->ne[0], gamma_2d->ne[1]);
     ggml_tensor* beta_cont = ggml_cont(ctx, beta);
     ggml_tensor* beta_2d = ggml_reshape_2d(ctx, beta_cont, 1, n_cols);
+    fprintf(stderr, "DEBUG LN: beta_2d (%ld, %ld)\n", beta_2d->ne[0], beta_2d->ne[1]);
 
     // Scale and shift: (n_rows, n_cols) * (1, n_cols) + (1, n_cols)
     ggml_tensor* scaled = ggml_mul(ctx, x_norm_2d, gamma_2d);
+    fprintf(stderr, "DEBUG LN: scaled (%ld, %ld)\n", scaled->ne[0], scaled->ne[1]);
     ggml_tensor* result = ggml_add(ctx, scaled, beta_2d);
 
     return result;
-}
 
 // ============== RMSNorm ==============
 
@@ -420,36 +423,49 @@ ggml_tensor* layer_norm(
     float eps
 ) {
     // LayerNorm: gamma * (x - mean) / sqrt(var + eps) + beta
-    // x shape: (n_rows, n_cols) = (seq_len, n_embd)
-    // For seq_len=1, we can use per-token norm which is same as full tensor
+    // x shape: (seq_len, n_embd) = (n_rows, n_cols)
 
-    int n_rows = (int)x->ne[0];  // number of rows (tokens)
-    int n_cols = (int)x->ne[1];  // number of columns (embedding dim)
+    int n_rows = (int)x->ne[0];
+    int n_cols = (int)x->ne[1];
+    int n = n_rows * n_cols;
 
-    // Compute mean over all elements: sum(x) / (n_rows * n_cols)
-    ggml_tensor* x_sum = ggml_sum(ctx, x);
-    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(n_rows * n_cols));
+    // Make x contiguous and flatten to 1D
+    ggml_tensor* x_cont = ggml_cont(ctx, x);
+    ggml_tensor* x_flat = ggml_reshape_1d(ctx, x_cont, n);
 
-    // Compute variance: sum((x - mean)^2) / (n_rows * n_cols)
-    ggml_tensor* x_centered = ggml_sub(ctx, x, x_mean);
+    // Compute sum and mean in 1D
+    ggml_tensor* x_sum = ggml_sum(ctx, x_flat);
+    ggml_tensor* mean = ggml_scale(ctx, x_sum, 1.0f / (float)n);
+
+    // Center: x - mean
+    ggml_tensor* x_centered = ggml_sub(ctx, x_flat, mean);
+
+    // Square and compute variance
     ggml_tensor* x_centered_sq = ggml_sqr(ctx, x_centered);
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
-    ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(n_rows * n_cols));
+    ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)n);
 
-    // Compute std = sqrt(var + eps)
+    // std = sqrt(variance + eps)
     ggml_tensor* var_eps = ggml_add(ctx, variance, ggml_new_scalar(ctx, eps));
     ggml_tensor* std = ggml_sqrt(ctx, var_eps);
 
     // Normalize: (x - mean) / std
     ggml_tensor* x_norm = ggml_div(ctx, x_centered, std);
 
-    // Scale and shift: gamma * x_norm + beta
-    // gamma and beta are 1D (n_cols,), need to reshape to 2D (1, n_cols) for broadcasting
-    ggml_tensor* gamma_2d = ggml_reshape_2d(ctx, gamma, 1, n_cols);
-    ggml_tensor* beta_2d = ggml_reshape_2d(ctx, beta, 1, n_cols);
+    // x_norm is 1D, make contiguous then reshape to 2D
+    ggml_tensor* x_norm_cont = ggml_cont(ctx, x_norm);
+    ggml_tensor* x_norm_2d = ggml_reshape_2d(ctx, x_norm_cont, n_rows, n_cols);
 
-    ggml_tensor* scaled = ggml_mul(ctx, x_norm, gamma_2d);
+    // gamma and beta are (n_cols,), reshape to (1, n_cols) for broadcasting
+    ggml_tensor* gamma_cont = ggml_cont(ctx, gamma);
+    ggml_tensor* gamma_2d = ggml_reshape_2d(ctx, gamma_cont, 1, n_cols);
+    ggml_tensor* beta_cont = ggml_cont(ctx, beta);
+    ggml_tensor* beta_2d = ggml_reshape_2d(ctx, beta_cont, 1, n_cols);
+
+    // Scale and shift: (n_rows, n_cols) * (1, n_cols) + (1, n_cols)
+    ggml_tensor* scaled = ggml_mul(ctx, x_norm_2d, gamma_2d);
     ggml_tensor* result = ggml_add(ctx, scaled, beta_2d);
+
     return result;
 }
 
