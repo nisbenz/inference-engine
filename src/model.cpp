@@ -35,7 +35,7 @@ bool GPT2Model::init(bool use_gpu) {
 
     // Initialize GGML
     struct ggml_init_params params = {
-        .mem_size   = 512 * 1024 * 1024,  // 512 MB
+        .mem_size   = 2048 * 1024 * 1024,  // 2 GB
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };
@@ -344,6 +344,9 @@ void GPT2Model::build_graph(
     int position,
     bool use_cache
 ) {
+    // Reset computation graph to avoid memory accumulation
+    ggml_graph_clear(&gf_);
+
     int seq_len = input_ids.size();
 
     // Get token embeddings: wte[input_ids]
