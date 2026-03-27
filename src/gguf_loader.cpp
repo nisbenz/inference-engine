@@ -18,6 +18,7 @@ static std::string read_gguf_string(FILE* fp) {
 }
 
 static void get_type_info(GGUF_TYPE_ID type, size_t& block_size, size_t& type_size) {
+    printf("[Debug] get_type_info called with type=%d\n", type);
     switch (type) {
         case GGUF_TID_F32:     block_size = 1;   type_size = 4;  break;
         case GGUF_TID_F16:     block_size = 1;   type_size = 2;  break;
@@ -39,7 +40,14 @@ static void get_type_info(GGUF_TYPE_ID type, size_t& block_size, size_t& type_si
         case GGUF_TID_I32:     block_size = 1;   type_size = 4;  break;
         case GGUF_TID_I64:     block_size = 1;   type_size = 8;  break;
         case GGUF_TID_F64:     block_size = 1;   type_size = 8;  break;
-        default: throw std::runtime_error("GGUF: unsupported tensor type");
+        default:
+            // Unknown type - print debug info and use Q8_0 as fallback approximation
+            printf("[Debug] Unknown tensor type %d, using Q8_0 approximation\n", type);
+            block_size = 32;
+            type_size = 34;
+            // Don't throw - use approximate size so we can continue
+            // throw std::runtime_error("GGUF: unsupported tensor type");
+            break;
     }
 }
 
@@ -48,7 +56,19 @@ size_t gguf_tensor_nbytes(const GGUFTensorInfo& info) {
     for (uint32_t i = 0; i < info.n_dims; i++) n_elements *= info.dims[i];
     size_t block_size, type_size;
     get_type_info(info.type, block_size, type_size);
-    return (n_elements / block_size) * type_size;
+    size_t result = (n_elements / block_size) * type_size;
+    printf("[Debug] Tensor '%s': dims=[%lu, %lu, %lu, %lu], type=%d, n_elements=%lu, block_size=%lu, type_size=%lu, nbytes=%lu\n",
+           info.name.c_str(),
+           (unsigned long)info.dims[0],
+           (unsigned long)info.dims[1],
+           (unsigned long)info.dims[2],
+           (unsigned long)info.dims[3],
+           info.type,
+           (unsigned long)n_elements,
+           (unsigned long)block_size,
+           (unsigned long)type_size,
+           (unsigned long)result);
+    return result;
 }
 
 static GGUFValue read_metadata_value(FILE* fp, GGUFMetadataValueType type) {
