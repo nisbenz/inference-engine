@@ -459,26 +459,59 @@ ggml_tensor* layer_norm(
     int n_rows = (int)x->ne[0];  // number of rows (tokens)
     int n_cols = (int)x->ne[1];  // number of columns (embedding dim)
 
+    printf("[layer_norm] x shape: %lu x %lu\n", (unsigned long)x->ne[0], (unsigned long)x->ne[1]);
+    fflush(stdout);
+
     // Compute mean over all elements: sum(x) / (n_rows * n_cols)
+    printf("[layer_norm] computing x_sum...\n");
+    fflush(stdout);
     ggml_tensor* x_sum = ggml_sum(ctx, x);
+    printf("[layer_norm] x_sum shape: ne[0]=%lu ne[1]=%lu ne[2]=%lu ne[3]=%lu\n",
+           (unsigned long)x_sum->ne[0], (unsigned long)x_sum->ne[1],
+           (unsigned long)x_sum->ne[2], (unsigned long)x_sum->ne[3]);
+    fflush(stdout);
+
+    printf("[layer_norm] computing x_mean...\n");
+    fflush(stdout);
     ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(n_rows * n_cols));
+    printf("[layer_norm] x_mean shape: ne[0]=%lu ne[1]=%lu ne[2]=%lu ne[3]=%lu\n",
+           (unsigned long)x_mean->ne[0], (unsigned long)x_mean->ne[1],
+           (unsigned long)x_mean->ne[2], (unsigned long)x_mean->ne[3]);
+    fflush(stdout);
 
     // Compute variance: sum((x - mean)^2) / (n_rows * n_cols)
+    printf("[layer_norm] about to call ggml_sub (x - x_mean)...\n");
+    fflush(stdout);
     ggml_tensor* x_centered = ggml_sub(ctx, x, x_mean);
+    printf("[layer_norm] ggml_sub succeeded\n");
+    fflush(stdout);
+
+    printf("[layer_norm] computing variance...\n");
+    fflush(stdout);
     ggml_tensor* x_centered_sq = ggml_sqr(ctx, x_centered);
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
     ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(n_rows * n_cols));
 
     // Compute std = sqrt(var + eps)
+    printf("[layer_norm] computing std...\n");
+    fflush(stdout);
     ggml_tensor* var_eps = ggml_add(ctx, variance, ggml_new_scalar(ctx, eps));
     ggml_tensor* std = ggml_sqrt(ctx, var_eps);
 
     // Normalize: (x - mean) / std
+    printf("[layer_norm] about to call ggml_div...\n");
+    fflush(stdout);
     ggml_tensor* x_norm = ggml_div(ctx, x_centered, std);
+    printf("[layer_norm] ggml_div succeeded\n");
+    fflush(stdout);
 
     // Scale and shift: gamma * x_norm + beta
+    printf("[layer_norm] computing scaled and result...\n");
+    fflush(stdout);
     ggml_tensor* scaled = ggml_mul(ctx, x_norm, gamma);
     ggml_tensor* result = ggml_add(ctx, scaled, beta);
+    printf("[layer_norm] done\n");
+    fflush(stdout);
     return result;
 }
 
