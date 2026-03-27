@@ -141,6 +141,8 @@ ggml_tensor* Attention::forward(
     ggml_tensor* q = ggml_view_2d(ctx, qkv, n_embd, seq_len, n_embd * sizeof(float), 0);
     ggml_tensor* k = ggml_view_2d(ctx, qkv, n_embd, seq_len, n_embd * sizeof(float), n_embd * sizeof(float));
     ggml_tensor* v = ggml_view_2d(ctx, qkv, n_embd, seq_len, n_embd * sizeof(float), 2 * n_embd * sizeof(float));
+    printf("[Debug Attn] qkv: ne[0]=%lu, ne[1]=%lu\n", (unsigned long)qkv->ne[0], (unsigned long)qkv->ne[1]);
+    printf("[Debug Attn] q: ne[0]=%lu, ne[1]=%lu\n", (unsigned long)q->ne[0], (unsigned long)q->ne[1]);
 
     // Reshape to (seq_len, n_heads, head_dim)
     q = ggml_reshape_3d(ctx, q, seq_len, n_heads, head_dim);
@@ -243,6 +245,10 @@ ggml_tensor* Attention::forward(
     // Compute attention scores: q_2d @ k_mat
     // (seq_len * n_heads, head_dim) @ (head_dim, n_heads * total_kv_len)
     // = (seq_len * n_heads, n_heads * total_kv_len)
+    printf("[Debug Attn] seq_len=%d, n_heads=%d, head_dim=%d, total_kv_len=%d, position=%d\n",
+           seq_len, n_heads, head_dim, total_kv_len, position);
+    printf("[Debug Attn] q_2d: ne[0]=%lu, ne[1]=%lu\n", (unsigned long)q_2d->ne[0], (unsigned long)q_2d->ne[1]);
+    printf("[Debug Attn] k_mat: ne[0]=%lu, ne[1]=%lu\n", (unsigned long)k_mat->ne[0], (unsigned long)k_mat->ne[1]);
     ggml_tensor* scores = ggml_mul_mat(ctx, q_2d, k_mat);
     scores = ggml_scale(ctx, scores, 1.0f / std::sqrt((float)head_dim));
 
