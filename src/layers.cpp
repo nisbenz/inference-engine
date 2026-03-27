@@ -25,16 +25,22 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     ggml_tensor* x_sum = ggml_sum(ctx, x);
     ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(seq_len * n_embd));
 
+    // Explicitly repeat x_mean to match x's shape for broadcast
+    ggml_tensor* x_mean_broadcast = ggml_repeat(ctx, x_mean, x);
+
     // Compute x - mean
-    ggml_tensor* x_centered = ggml_sub(ctx, x, x_mean);
+    ggml_tensor* x_centered = ggml_sub(ctx, x, x_mean_broadcast);
 
     // Compute variance: mean((x - mean)^2)
     ggml_tensor* x_centered_sq = ggml_sqr(ctx, x_centered);
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
     ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(seq_len * n_embd));
 
+    // Explicitly repeat variance to match x's shape
+    ggml_tensor* variance_broadcast = ggml_repeat(ctx, variance, x);
+
     // Compute sqrt(var + eps)
-    ggml_tensor* var_eps = ggml_add(ctx, variance, ggml_new_scalar(ctx, GPT2Config::layer_norm_eps));
+    ggml_tensor* var_eps = ggml_add(ctx, variance_broadcast, ggml_new_scalar(ctx, GPT2Config::layer_norm_eps));
     ggml_tensor* std = ggml_sqrt(ctx, var_eps);
 
     // Normalize: (x - mean) / std
@@ -52,9 +58,11 @@ ggml_tensor* RMSNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     // RMSNorm: x / sqrt(mean(x^2) + eps) * weight
     ggml_tensor* x2 = ggml_sqr(ctx, x);
     ggml_tensor* mean2 = ggml_mean(ctx, x2);
-    ggml_tensor* var_eps = ggml_add(ctx, mean2, ggml_new_scalar(ctx, GPT2Config::layer_norm_eps));
-    ggml_tensor* rms = ggml_sqrt(ctx, var_eps);
-    ggml_tensor* normalized = ggml_div(ctx, x, rms);
+    ggml_tensor* rms_eps = ggml_add(ctx, mean2, ggml_new_scalar(ctx, GPT2Config::layer_norm_eps));
+    ggml_tensor* rms = ggml_sqrt(ctx, rms_eps);
+    // Explicitly repeat rms to match x's shape
+    ggml_tensor* rms_broadcast = ggml_repeat(ctx, rms, x);
+    ggml_tensor* normalized = ggml_div(ctx, x, rms_broadcast);
     ggml_tensor* result = ggml_mul(ctx, normalized, weight);
     return result;
 }
