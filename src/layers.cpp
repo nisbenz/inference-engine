@@ -138,7 +138,13 @@ ggml_tensor* Attention::forward(
     int seq_len = (int)ggml_nrows(x);
 
     // QKV projection: (seq_len, n_embd) @ (n_embd, 3*n_embd) = (seq_len, 3*n_embd)
+    printf("[Attention] calling ggml_mul_mat qkv: x=%lux%lu, c_attn_weight=%lux%lu\n",
+           (unsigned long)x->ne[0], (unsigned long)x->ne[1],
+           (unsigned long)c_attn_weight->ne[0], (unsigned long)c_attn_weight->ne[1]);
+    fflush(stdout);
     ggml_tensor* qkv = ggml_mul_mat(ctx, x, c_attn_weight);
+    printf("[Attention] ggml_mul_mat qkv succeeded\n");
+    fflush(stdout);
     qkv = ggml_add(ctx, qkv, c_attn_bias);
 
     // Split into q, k, v - each (seq_len, n_embd)
@@ -279,6 +285,10 @@ ggml_tensor* Attention::forward(
         // K_h^T: (head_dim, total_kv_len)
         // scores_h: (seq_len, total_kv_len)
         ggml_tensor* k_h_T = ggml_transpose(ctx, k_h);
+        printf("[Attention head %d] q_h: %lux%lu, k_h_T: %lux%lu\n",
+               h, (unsigned long)q_h->ne[0], (unsigned long)q_h->ne[1],
+               (unsigned long)k_h_T->ne[0], (unsigned long)k_h_T->ne[1]);
+        fflush(stdout);
         ggml_tensor* scores_h = ggml_mul_mat(ctx, q_h, k_h_T);
 
         // Scale by 1/sqrt(head_dim)
@@ -308,6 +318,10 @@ ggml_tensor* Attention::forward(
         // attn_h: (seq_len, total_kv_len)
         // V_h: (total_kv_len, head_dim)
         // output_h: (seq_len, head_dim)
+        printf("[Attention head %d] attn_h: %lux%lu, v_h: %lux%lu\n",
+               h, (unsigned long)attn_h->ne[0], (unsigned long)attn_h->ne[1],
+               (unsigned long)v_h->ne[0], (unsigned long)v_h->ne[1]);
+        fflush(stdout);
         ggml_tensor* output_h = ggml_mul_mat(ctx, attn_h, v_h);
 
         // Copy output_h into the corresponding head in attn_out
@@ -327,6 +341,10 @@ ggml_tensor* Attention::forward(
     attn_out = ggml_reshape_2d(ctx, attn_out, seq_len, n_embd);
 
     // Output projection: (seq_len, n_embd) @ (n_embd, n_embd) = (seq_len, n_embd)
+    printf("[Attention] calling ggml_mul_mat c_proj: attn_out=%lux%lu, c_proj_weight=%lux%lu\n",
+           (unsigned long)attn_out->ne[0], (unsigned long)attn_out->ne[1],
+           (unsigned long)c_proj_weight->ne[0], (unsigned long)c_proj_weight->ne[1]);
+    fflush(stdout);
     ggml_tensor* out = ggml_mul_mat(ctx, attn_out, c_proj_weight);
     out = ggml_add(ctx, out, c_proj_bias);
 
@@ -366,7 +384,13 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // FFN: GELU(up_proj(x)) * down_proj(x)
 
     // up_proj: (n_embd, n_ffn)
+    printf("[FFN] calling ggml_mul_mat up: x=%lux%lu, c_fc_weight=%lux%lu\n",
+           (unsigned long)x->ne[0], (unsigned long)x->ne[1],
+           (unsigned long)c_fc_weight->ne[0], (unsigned long)c_fc_weight->ne[1]);
+    fflush(stdout);
     ggml_tensor* up = ggml_mul_mat(ctx, x, c_fc_weight);
+    printf("[FFN] ggml_mul_mat up succeeded\n");
+    fflush(stdout);
     up = ggml_add(ctx, up, c_fc_bias);
     // up: (seq_len, n_ffn)
 
@@ -375,7 +399,13 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // activated: (seq_len, n_ffn)
 
     // down_proj: (n_ffn, n_embd)
+    printf("[FFN] calling ggml_mul_mat down: activated=%lux%lu, c_proj_weight=%lux%lu\n",
+           (unsigned long)activated->ne[0], (unsigned long)activated->ne[1],
+           (unsigned long)c_proj_weight->ne[0], (unsigned long)c_proj_weight->ne[1]);
+    fflush(stdout);
     ggml_tensor* down = ggml_mul_mat(ctx, activated, c_proj_weight);
+    printf("[FFN] ggml_mul_mat down succeeded\n");
+    fflush(stdout);
     down = ggml_add(ctx, down, c_proj_bias);
     // down: (seq_len, n_embd)
 
