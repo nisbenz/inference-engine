@@ -414,16 +414,49 @@ ggml_tensor* TransformerBlock::forward(
     int position,
     bool use_cache
 ) {
+    static int layer_num = 0;
+    printf("[TransformerBlock %d] START: x ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)x->ne[0], (unsigned long)x->ne[1]);
+    fflush(stdout);
+
     // Pre-norm architecture: LN1 -> Attention -> Residual
+    printf("[TransformerBlock %d] Before LN1\n", layer_num);
+    fflush(stdout);
     ggml_tensor* ln1_out = layer_norm(ctx, x, ln1.gamma, ln1.beta, GPT2Config::layer_norm_eps);
+    printf("[TransformerBlock %d] After LN1: ln1_out ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)ln1_out->ne[0], (unsigned long)ln1_out->ne[1]);
+    fflush(stdout);
+
+    printf("[TransformerBlock %d] Before Attention\n", layer_num);
+    fflush(stdout);
     ggml_tensor* attn_out = attention.forward(ctx, gf, ln1_out, position, use_cache);
+    printf("[TransformerBlock %d] After Attention: attn_out ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)attn_out->ne[0], (unsigned long)attn_out->ne[1]);
+    fflush(stdout);
+
+    printf("[TransformerBlock %d] Before residual add 1\n", layer_num);
+    fflush(stdout);
     ggml_tensor* h1 = ggml_add(ctx, x, attn_out);
+    printf("[TransformerBlock %d] After residual 1: h1 ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)h1->ne[0], (unsigned long)h1->ne[1]);
+    fflush(stdout);
 
     // LN2 -> FFN -> Residual
+    printf("[TransformerBlock %d] Before LN2\n", layer_num);
+    fflush(stdout);
     ggml_tensor* ln2_out = layer_norm(ctx, h1, ln2.gamma, ln2.beta, GPT2Config::layer_norm_eps);
-    ggml_tensor* ffn_out = ffn.forward(ctx, gf, ln2_out);
-    ggml_tensor* h2 = ggml_add(ctx, h1, ffn_out);
+    printf("[TransformerBlock %d] After LN2: ln2_out ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)ln2_out->ne[0], (unsigned long)ln2_out->ne[1]);
+    fflush(stdout);
 
+    printf("[TransformerBlock %d] Before FFN\n", layer_num);
+    fflush(stdout);
+    ggml_tensor* ffn_out = ffn.forward(ctx, gf, ln2_out);
+    printf("[TransformerBlock %d] After FFN: ffn_out ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)ffn_out->ne[0], (unsigned long)ffn_out->ne[1]);
+    fflush(stdout);
+
+    printf("[TransformerBlock %d] Before residual add 2\n", layer_num);
+    fflush(stdout);
+    ggml_tensor* h2 = ggml_add(ctx, h1, ffn_out);
+    printf("[TransformerBlock %d] After residual 2: h2 ne[0]=%lu ne[1]=%lu\n", layer_num, (unsigned long)h2->ne[0], (unsigned long)h2->ne[1]);
+    fflush(stdout);
+
+    layer_num++;
     return h2;
 }
 
