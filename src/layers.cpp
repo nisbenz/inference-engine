@@ -13,19 +13,19 @@ static inline ggml_tensor* ggml_new_scalar(ggml_context* ctx, float value) {
 
 ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     // LayerNorm: gamma * (x - mean) / sqrt(var + eps) + beta
-    // x shape: (seq_len, n_embd)
+    // x shape: (n_rows, n_cols) = (seq_len, n_embd)
     // Since GGML lacks per-row reduction ops, we use a simplified approach:
     // compute mean/variance over the full tensor as approximation
     // For seq_len=1 (typical during generation), this equals per-row computation
 
-    int seq_len = (int)ggml_nrows(x);
-    int n_embd = GPT2Config::n_embd;
+    int n_rows = (int)x->ne[0];  // number of rows (tokens)
+    int n_cols = (int)x->ne[1];  // number of columns (embedding dim)
 
-    printf("[LayerNorm] START: x ne[0]=%lu ne[1]=%lu, seq_len=%d n_embd=%d\n",
-           (unsigned long)x->ne[0], (unsigned long)x->ne[1], seq_len, n_embd);
+    printf("[LayerNorm] START: x ne[0]=%lu ne[1]=%lu, n_rows=%d n_cols=%d\n",
+           (unsigned long)x->ne[0], (unsigned long)x->ne[1], n_rows, n_cols);
     fflush(stdout);
 
-    // Compute mean over all elements: sum(x) / (seq_len * n_embd)
+    // Compute mean over all elements: sum(x) / (n_rows * n_cols)
     printf("[LayerNorm] Before ggml_sum\n");
     fflush(stdout);
     ggml_tensor* x_sum = ggml_sum(ctx, x);
@@ -34,7 +34,7 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
 
     printf("[LayerNorm] Before ggml_scale for mean\n");
     fflush(stdout);
-    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(seq_len * n_embd));
+    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(n_rows * n_cols));
     printf("[LayerNorm] After ggml_scale for mean: x_mean ne[0]=%lu ne[1]=%lu\n",
            (unsigned long)x_mean->ne[0], (unsigned long)x_mean->ne[1]);
     fflush(stdout);
@@ -62,7 +62,7 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
     printf("[LayerNorm] Before ggml_scale for variance\n");
     fflush(stdout);
-    ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(seq_len * n_embd));
+    ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(n_rows * n_cols));
 
     printf("[LayerNorm] Before ggml_repeat for variance broadcast\n");
     fflush(stdout);
@@ -555,11 +555,12 @@ ggml_tensor* layer_norm(
     // LayerNorm: gamma * (x - mean) / sqrt(var + eps) + beta
     // Since GGML lacks per-row reduction ops, compute mean/variance over full tensor
     // For seq_len=1 (typical during generation), this equals per-row computation
-    int seq_len = (int)ggml_nrows(x);
-    int n_embd = GPT2Config::n_embd;
+    // Note: ggml_nrows returns ne[1], but we need ne[0] for row count in 2D tensor
+    int n_rows = (int)x->ne[0];  // number of rows (tokens)
+    int n_cols = (int)x->ne[1];  // number of columns (embedding dim)
 
-    printf("[layer_norm function] START: x ne[0]=%lu ne[1]=%lu, seq_len=%d n_embd=%d\n",
-           (unsigned long)x->ne[0], (unsigned long)x->ne[1], seq_len, n_embd);
+    printf("[layer_norm function] START: x ne[0]=%lu ne[1]=%lu, n_rows=%d n_cols=%d\n",
+           (unsigned long)x->ne[0], (unsigned long)x->ne[1], n_rows, n_cols);
     printf("[layer_norm function] gamma ne[0]=%lu\n", (unsigned long)gamma->ne[0]);
     fflush(stdout);
 
@@ -569,7 +570,7 @@ ggml_tensor* layer_norm(
     ggml_tensor* x_sum = ggml_sum(ctx, x);
     printf("[layer_norm function] After ggml_sum\n");
     fflush(stdout);
-    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(seq_len * n_embd));
+    ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(n_rows * n_cols));
 
     printf("[layer_norm function] Before ggml_repeat for x_mean\n");
     fflush(stdout);
@@ -582,7 +583,7 @@ ggml_tensor* layer_norm(
     // Compute variance: mean((x - mean)^2)
     ggml_tensor* x_centered_sq = ggml_sqr(ctx, x_centered);
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
-    ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(seq_len * n_embd));
+    ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(n_rows * n_cols));
 
     // Explicitly repeat variance to match x's shape
     ggml_tensor* variance_broadcast = ggml_repeat(ctx, variance, x);
