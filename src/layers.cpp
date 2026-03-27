@@ -133,6 +133,11 @@ ggml_tensor* Attention::forward(
     int head_dim = GPT2Config::head_dim;
     int seq_len = (int)ggml_nrows(x);
 
+    printf("[Debug Attn] START: x ne[0]=%lu ne[1]=%lu, c_attn_weight ne[0]=%lu ne[1]=%lu\n",
+           (unsigned long)x->ne[0], (unsigned long)x->ne[1],
+           (unsigned long)c_attn_weight->ne[0], (unsigned long)c_attn_weight->ne[1]);
+    fflush(stdout);
+
     // QKV projection: (seq_len, n_embd) @ (n_embd, 3*n_embd) = (seq_len, 3*n_embd)
     ggml_tensor* qkv = ggml_mul_mat(ctx, x, c_attn_weight);
     qkv = ggml_add(ctx, qkv, c_attn_bias);
