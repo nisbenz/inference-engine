@@ -61,6 +61,7 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     ggml_tensor* result = ggml_add(ctx, scaled, beta_2d);
 
     return result;
+}
 
 // ============== RMSNorm ==============
 
