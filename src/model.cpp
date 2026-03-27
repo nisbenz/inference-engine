@@ -328,15 +328,20 @@ std::vector<float> GPT2Model::forward(
         return std::vector<float>();
     }
 
-    // Skip graph building for now since compute() is a placeholder
-    // Just return random logits to verify pipeline works
-    // TODO: implement proper GGML graph computation
-    std::vector<float> logits(VOCAB_SIZE);
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    for (int i = 0; i < VOCAB_SIZE; i++) {
-        logits[i] = dist(gen);
+    // Build computation graph
+    build_graph(input_ids, position, use_cache);
+
+    // Compute
+    compute();
+
+    // Return logits - copy from logits_data_ buffer
+    // Note: In a real implementation, we'd extract logits from the computed tensor
+    // For now, initialize with zeros
+    std::vector<float> logits(VOCAB_SIZE, 0.0f);
+
+    // If we have computed logits in logits_data_, copy them
+    if (logits_data_ && logits_size_ == VOCAB_SIZE) {
+        memcpy(logits.data(), logits_data_, VOCAB_SIZE * sizeof(float));
     }
     return logits;
 }
@@ -411,9 +416,12 @@ void GPT2Model::build_graph(
 }
 
 void GPT2Model::compute() {
-    // Placeholder - actual computation requires proper GGML backend
-    // Graph is already built via ggml_build_forward_expand calls in build_graph
-    ggml_graph_clear(&gf_);
+    // Compute the built graph
+    // ggml_graph_compute_with_ctx is the standard GGML compute function
+    ggml_graph_compute_with_ctx(ctx_, &gf_, NULL);
+
+    // Get result - logits tensor should be the last node in the graph
+    // We'll read directly from the tensor data after computation
 }
 
 std::vector<int> GPT2Model::generate(
