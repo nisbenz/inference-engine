@@ -35,11 +35,6 @@ ggml_tensor* LayerNorm::forward(ggml_context* ctx, ggml_tensor* x) {
     // Normalize and scale/shift
     ggml_tensor* x_norm = ggml_div(ctx, x_centered, std);
 
-    printf("[LayerNorm::forward] x_norm: %lux%lu, gamma: %lu, beta: %lu\n",
-           (unsigned long)x_norm->ne[0], (unsigned long)x_norm->ne[1],
-           (unsigned long)gamma->ne[0], (unsigned long)beta->ne[0]);
-    fflush(stdout);
-
     // gamma and beta are 1D (n_cols,), need to reshape to 2D (1, n_cols) for broadcasting
     ggml_tensor* gamma_2d = ggml_reshape_2d(ctx, gamma, 1, n_cols);
     ggml_tensor* beta_2d = ggml_reshape_2d(ctx, beta, 1, n_cols);
@@ -138,22 +133,21 @@ ggml_tensor* Attention::forward(
     int seq_len = (int)ggml_nrows(x);
 
     // QKV projection: (seq_len, n_embd) @ (n_embd, 3*n_embd) = (seq_len, 3*n_embd)
-    printf("[Attention] x: %lux%lu type=%d\n", (unsigned long)x->ne[0], (unsigned long)x->ne[1], x->type);
-    printf("[Attention] c_attn_weight: %lux%lu type=%d\n", (unsigned long)c_attn_weight->ne[0], (unsigned long)c_attn_weight->ne[1], c_attn_weight->type);
-    printf("[Attention] GGML_TYPE_F32=%d\n", GGML_TYPE_F32);
-    fflush(stdout);
+    //
+    // GGML's ggml_mul_mat requires BOTH tensors to have the same ne[0] (first dimension).
+    // This is different from standard matmul!
+    // For standard A @ B = C where A is (m,n) and B is (n,k), we get C is (m,k).
+    // GGML expects: A has ne=(k,m), B has ne=(k,n), result ne=(m,n).
+    //
+    // Our x is (seq_len, n_embd) = (16, 768) and weight is (n_embd, 3*n_embd) = (768, 2304)
+    // To use GGML: transpose x to (n_embd, seq_len) = (768, 16), weight stays (768, 2304)
+    // Then GGML matmul gives (seq_len, 3*n_embd) = (16, 2304)
 
-    // Use ggml_reshape_2d to ensure proper shape
-    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1]);
-    ggml_tensor* w_reshaped = ggml_reshape_2d(ctx, c_attn_weight, c_attn_weight->ne[0], c_attn_weight->ne[1]);
-
-    printf("[Attention] x_reshaped: %lux%lu type=%d\n", (unsigned long)x_reshaped->ne[0], (unsigned long)x_reshaped->ne[1], x_reshaped->type);
-    printf("[Attention] w_reshaped: %lux%lu type=%d\n", (unsigned long)w_reshaped->ne[0], (unsigned long)w_reshaped->ne[1], w_reshaped->type);
-    fflush(stdout);
+    ggml_tensor* x_t = ggml_transpose(ctx, x);
+    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x_t, x->ne[1], x->ne[0]); // (n_embd, seq_len)
+    ggml_tensor* w_reshaped = ggml_reshape_2d(ctx, c_attn_weight, c_attn_weight->ne[0], c_attn_weight->ne[1]); // (n_embd, 3*n_embd)
 
     ggml_tensor* qkv = ggml_mul_mat(ctx, x_reshaped, w_reshaped);
-    printf("[Attention] ggml_mul_mat qkv succeeded\n");
-    fflush(stdout);
     qkv = ggml_add(ctx, qkv, c_attn_bias);
 
     // Split into q, k, v - each (seq_len, n_embd)
@@ -290,15 +284,13 @@ ggml_tensor* Attention::forward(
                                         h * head_dim * sizeof(float));
 
         // Compute scores_h = Q_h @ K_h^T
-        // Q_h: (seq_len, head_dim)
-        // K_h^T: (head_dim, total_kv_len)
-        // scores_h: (seq_len, total_kv_len)
-        ggml_tensor* k_h_T = ggml_transpose(ctx, k_h);
-        printf("[Attention head %d] q_h: %lux%lu, k_h_T: %lux%lu\n",
-               h, (unsigned long)q_h->ne[0], (unsigned long)q_h->ne[1],
-               (unsigned long)k_h_T->ne[0], (unsigned long)k_h_T->ne[1]);
-        fflush(stdout);
-        ggml_tensor* scores_h = ggml_mul_mat(ctx, q_h, k_h_T);
+        // Q_h: (seq_len, head_dim) -> transpose to (head_dim, seq_len) for GGML
+        // K_h^T: (head_dim, total_kv_len) -> has same ne[0] = head_dim
+        // For GGML matmul: need same ne[0] on both tensors
+        ggml_tensor* q_h_t = ggml_transpose(ctx, q_h);  // (head_dim, seq_len)
+        ggml_tensor* k_h_T = ggml_transpose(ctx, k_h);   // (head_dim, total_kv_len)
+        // GGML result: (seq_len, total_kv_len) = {q_h_t.ne[1], k_h_T.ne[1]}
+        ggml_tensor* scores_h = ggml_mul_mat(ctx, q_h_t, k_h_T);
 
         // Scale by 1/sqrt(head_dim)
         scores_h = ggml_scale(ctx, scores_h, 1.0f / std::sqrt((float)head_dim));
@@ -324,14 +316,15 @@ ggml_tensor* Attention::forward(
         ggml_tensor* attn_h = ggml_soft_max(ctx, scores_h);
 
         // Compute output_h = attn_h @ V_h
-        // attn_h: (seq_len, total_kv_len)
-        // V_h: (total_kv_len, head_dim)
-        // output_h: (seq_len, head_dim)
-        printf("[Attention head %d] attn_h: %lux%lu, v_h: %lux%lu\n",
-               h, (unsigned long)attn_h->ne[0], (unsigned long)attn_h->ne[1],
-               (unsigned long)v_h->ne[0], (unsigned long)v_h->ne[1]);
-        fflush(stdout);
-        ggml_tensor* output_h = ggml_mul_mat(ctx, attn_h, v_h);
+        // attn_h: (seq_len, total_kv_len) with ne[0]=seq_len
+        // V_h: (total_kv_len, head_dim) with ne[0]=total_kv_len
+        // For GGML: need same ne[0], so transpose attn_h to (total_kv_len, seq_len)
+        // GGML result: (seq_len, head_dim)
+        ggml_tensor* attn_h_t = ggml_transpose(ctx, attn_h);
+        ggml_tensor* v_h_reshaped = ggml_reshape_2d(ctx, v_h, v_h->ne[0], v_h->ne[1]); // (total_kv_len, head_dim)
+
+        // GGML matmul: (total_kv_len, seq_len) @ (total_kv_len, head_dim) = (seq_len, head_dim)
+        ggml_tensor* output_h = ggml_mul_mat(ctx, attn_h_t, v_h_reshaped);
 
         // Copy output_h into the corresponding head in attn_out
         // attn_out is (seq_len, n_heads, head_dim)
@@ -350,11 +343,12 @@ ggml_tensor* Attention::forward(
     attn_out = ggml_reshape_2d(ctx, attn_out, seq_len, n_embd);
 
     // Output projection: (seq_len, n_embd) @ (n_embd, n_embd) = (seq_len, n_embd)
-    printf("[Attention] calling ggml_mul_mat c_proj: attn_out=%lux%lu, c_proj_weight=%lux%lu\n",
-           (unsigned long)attn_out->ne[0], (unsigned long)attn_out->ne[1],
-           (unsigned long)c_proj_weight->ne[0], (unsigned long)c_proj_weight->ne[1]);
-    fflush(stdout);
-    ggml_tensor* out = ggml_mul_mat(ctx, attn_out, c_proj_weight);
+    // For GGML matmul: transpose attn_out to (n_embd, seq_len)
+    ggml_tensor* attn_out_t = ggml_transpose(ctx, attn_out);
+    ggml_tensor* attn_out_reshaped = ggml_reshape_2d(ctx, attn_out_t, attn_out->ne[1], attn_out->ne[0]); // (n_embd, seq_len)
+    ggml_tensor* proj_reshaped = ggml_reshape_2d(ctx, c_proj_weight, c_proj_weight->ne[0], c_proj_weight->ne[1]); // (n_embd, n_embd)
+
+    ggml_tensor* out = ggml_mul_mat(ctx, attn_out_reshaped, proj_reshaped);
     out = ggml_add(ctx, out, c_proj_bias);
 
     ggml_build_forward_expand(gf, out);
@@ -391,15 +385,17 @@ ggml_tensor* FFN::gelu(ggml_context* ctx, ggml_tensor* x) {
 
 ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // FFN: GELU(up_proj(x)) * down_proj(x)
+    //
+    // For GGML matmul, we need to transpose x since GGML requires same ne[0] for both tensors.
+    // x: (seq_len, n_embd) -> transpose to (n_embd, seq_len)
+    // up_proj weight: (n_embd, n_ffn)
+    // After GGML matmul: (seq_len, n_ffn)
 
-    // up_proj: (n_embd, n_ffn)
-    printf("[FFN] calling ggml_mul_mat up: x=%lux%lu, c_fc_weight=%lux%lu\n",
-           (unsigned long)x->ne[0], (unsigned long)x->ne[1],
-           (unsigned long)c_fc_weight->ne[0], (unsigned long)c_fc_weight->ne[1]);
-    fflush(stdout);
-    ggml_tensor* up = ggml_mul_mat(ctx, x, c_fc_weight);
-    printf("[FFN] ggml_mul_mat up succeeded\n");
-    fflush(stdout);
+    ggml_tensor* x_t = ggml_transpose(ctx, x);
+    ggml_tensor* x_reshaped = ggml_reshape_2d(ctx, x_t, x->ne[1], x->ne[0]); // (n_embd, seq_len)
+
+    ggml_tensor* up_reshaped = ggml_reshape_2d(ctx, c_fc_weight, c_fc_weight->ne[0], c_fc_weight->ne[1]); // (n_embd, n_ffn)
+    ggml_tensor* up = ggml_mul_mat(ctx, x_reshaped, up_reshaped);
     up = ggml_add(ctx, up, c_fc_bias);
     // up: (seq_len, n_ffn)
 
@@ -408,13 +404,11 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // activated: (seq_len, n_ffn)
 
     // down_proj: (n_ffn, n_embd)
-    printf("[FFN] calling ggml_mul_mat down: activated=%lux%lu, c_proj_weight=%lux%lu\n",
-           (unsigned long)activated->ne[0], (unsigned long)activated->ne[1],
-           (unsigned long)c_proj_weight->ne[0], (unsigned long)c_proj_weight->ne[1]);
-    fflush(stdout);
-    ggml_tensor* down = ggml_mul_mat(ctx, activated, c_proj_weight);
-    printf("[FFN] ggml_mul_mat down succeeded\n");
-    fflush(stdout);
+    ggml_tensor* activated_t = ggml_transpose(ctx, activated);
+    ggml_tensor* activated_reshaped = ggml_reshape_2d(ctx, activated_t, activated->ne[1], activated->ne[0]); // (n_ffn, seq_len)
+
+    ggml_tensor* down_reshaped = ggml_reshape_2d(ctx, c_proj_weight, c_proj_weight->ne[0], c_proj_weight->ne[1]); // (n_ffn, n_embd)
+    ggml_tensor* down = ggml_mul_mat(ctx, activated_reshaped, down_reshaped);
     down = ggml_add(ctx, down, c_proj_bias);
     // down: (seq_len, n_embd)
 
@@ -508,73 +502,30 @@ ggml_tensor* layer_norm(
     int n_rows = (int)x->ne[0];  // number of rows (tokens)
     int n_cols = (int)x->ne[1];  // number of columns (embedding dim)
 
-    printf("[layer_norm] x shape: %lu x %lu\n", (unsigned long)x->ne[0], (unsigned long)x->ne[1]);
-    fflush(stdout);
-
     // Compute mean over all elements: sum(x) / (n_rows * n_cols)
-    printf("[layer_norm] computing x_sum...\n");
-    fflush(stdout);
     ggml_tensor* x_sum = ggml_sum(ctx, x);
-    printf("[layer_norm] x_sum shape: ne[0]=%lu ne[1]=%lu ne[2]=%lu ne[3]=%lu\n",
-           (unsigned long)x_sum->ne[0], (unsigned long)x_sum->ne[1],
-           (unsigned long)x_sum->ne[2], (unsigned long)x_sum->ne[3]);
-    fflush(stdout);
-
-    printf("[layer_norm] computing x_mean...\n");
-    fflush(stdout);
     ggml_tensor* x_mean = ggml_scale(ctx, x_sum, 1.0f / (float)(n_rows * n_cols));
-    printf("[layer_norm] x_mean shape: ne[0]=%lu ne[1]=%lu ne[2]=%lu ne[3]=%lu\n",
-           (unsigned long)x_mean->ne[0], (unsigned long)x_mean->ne[1],
-           (unsigned long)x_mean->ne[2], (unsigned long)x_mean->ne[3]);
-    fflush(stdout);
 
     // Compute variance: sum((x - mean)^2) / (n_rows * n_cols)
-    printf("[layer_norm] about to call ggml_sub (x - x_mean)...\n");
-    fflush(stdout);
     ggml_tensor* x_centered = ggml_sub(ctx, x, x_mean);
-    printf("[layer_norm] ggml_sub succeeded\n");
-    fflush(stdout);
-
-    printf("[layer_norm] computing variance...\n");
-    fflush(stdout);
     ggml_tensor* x_centered_sq = ggml_sqr(ctx, x_centered);
     ggml_tensor* var_sum = ggml_sum(ctx, x_centered_sq);
     ggml_tensor* variance = ggml_scale(ctx, var_sum, 1.0f / (float)(n_rows * n_cols));
 
     // Compute std = sqrt(var + eps)
-    printf("[layer_norm] computing std...\n");
-    fflush(stdout);
     ggml_tensor* var_eps = ggml_add(ctx, variance, ggml_new_scalar(ctx, eps));
     ggml_tensor* std = ggml_sqrt(ctx, var_eps);
 
     // Normalize: (x - mean) / std
-    printf("[layer_norm] about to call ggml_div...\n");
-    fflush(stdout);
     ggml_tensor* x_norm = ggml_div(ctx, x_centered, std);
-    printf("[layer_norm] ggml_div succeeded\n");
-    fflush(stdout);
 
     // Scale and shift: gamma * x_norm + beta
-    printf("[layer_norm] x_norm shape: ne[0]=%lu ne[1]=%lu\n",
-           (unsigned long)x_norm->ne[0], (unsigned long)x_norm->ne[1]);
-    printf("[layer_norm] gamma shape: ne[0]=%lu\n", (unsigned long)gamma->ne[0]);
-    fflush(stdout);
-
-    printf("[layer_norm] calling ggml_mul (x_norm * gamma)...\n");
-    fflush(stdout);
     // gamma and beta are 1D (n_cols,), need to reshape to 2D (1, n_cols) for broadcasting
     ggml_tensor* gamma_2d = ggml_reshape_2d(ctx, gamma, 1, n_cols);
     ggml_tensor* beta_2d = ggml_reshape_2d(ctx, beta, 1, n_cols);
 
     ggml_tensor* scaled = ggml_mul(ctx, x_norm, gamma_2d);
-    printf("[layer_norm] ggml_mul succeeded\n");
-    fflush(stdout);
-
-    printf("[layer_norm] calling ggml_add (scaled + beta)...\n");
-    fflush(stdout);
     ggml_tensor* result = ggml_add(ctx, scaled, beta_2d);
-    printf("[layer_norm] ggml_add succeeded\n");
-    fflush(stdout);
     return result;
 }
 
