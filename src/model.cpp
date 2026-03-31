@@ -353,7 +353,25 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
 
         std::cout << "\nLoaded " << loaded << " tensors, " << failed << " failed/skipped" << std::endl;
 
-       
+        // Debug: verify wte_ weights are non-zero and reasonable
+        {
+            const float* wte_data = (const float*)wte_->data;
+            float wte_sum = 0, wte_max = 0;
+            size_t non_zero = 0;
+            for (size_t i = 0; i < ggml_nelements(wte_); i++) {
+                wte_sum += std::abs(wte_data[i]);
+                wte_max = std::max(wte_max, std::abs(wte_data[i]));
+                if (wte_data[i] != 0.0f) non_zero++;
+            }
+            std::cout << "[DEBUG] wte_ stats: sum=" << wte_sum << " max=" << wte_max
+                      << " non_zero=" << non_zero << "/" << ggml_nelements(wte_) << std::endl;
+            // Check first token embedding (token 445 = "red")
+            float* emb_red = (float*)&wte_data[445 * N_EMBD];
+            float emb_sum = 0;
+            for (int i = 0; i < N_EMBD; i++) emb_sum += std::abs(emb_red[i]);
+            std::cout << "[DEBUG] wte_[445] (red) L1 sum=" << emb_sum << std::endl;
+        }
+
         fclose(gguf.fp);
         std::cout << "GGUF model loaded successfully" << std::endl;
         return true;
@@ -485,11 +503,20 @@ void GPT2Model::build_graph(
 
     int seq_len = input_ids.size();
 
-    // Build tokens tensor for fast row extraction
+    // Build tokens tensor for row extraction
     ggml_tensor* tokens_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
     std::memcpy(tokens_tensor->data, input_ids.data(), seq_len * sizeof(int32_t));
 
-    // Get input embeddings: perfectly mapped to [N_EMBD, seq_len]
+    // Get input embeddings: wte_ is stored with ne[0]=N_EMBD, ne[1]=VOCAB_SIZE
+    // In GGML column-major, element [r, c] = data[c * N_EMBD + r]
+    // For token t, embedding is at offsets t*N_EMBD through t*N_EMBD+N_EMBD-1
+    // But data[t*N_EMBD + r] = data[c=N_EMBD + r] which is NOT contiguous!
+    // ggml_get_rows extracts "rows" which should be [r=0..N_EMBD-1] for col t
+    // BUT GGML stores as [c0_r0, c0_r1, ..., c0_r767, c1_r0, ...] (column-major)
+    // So row t is NOT contiguous - it's every N_EMBD-th element!
+    //
+    // FIX: Change allocation so ne[0]=VOCAB_SIZE, ne[1]=N_EMBD
+    // Then row t IS contiguous at offsets [t*N_EMBD .. (t+1)*N_EMBD - 1]
     ggml_tensor* input_embd = ggml_get_rows(ctx0, wte_, tokens_tensor);
 
     // Build positional indices tensor
@@ -501,7 +528,7 @@ void GPT2Model::build_graph(
     ggml_tensor* pos_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
     std::memcpy(pos_tensor->data, pos_ids.data(), seq_len * sizeof(int32_t));
 
-    // Get positional embeddings: properly maps to [N_EMBD, seq_len]
+    // Get positional embeddings
     ggml_tensor* pos_embd = ggml_get_rows(ctx0, wpe_, pos_tensor);
 
     ggml_tensor* h = ggml_add(ctx0, input_embd, pos_embd);
