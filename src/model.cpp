@@ -330,13 +330,14 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                     if (read_success) {
                         auto* dst_ptr = (float*)dst->data;
                         if (needs_transpose) {
-                            // Genuine transpose: swap the rows and columns
-                            int in_features = (int)dst->ne[0];
-                            int out_features = (int)dst->ne[1];
-                            for (int r = 0; r < out_features; r++) {
-                                for (int c = 0; c < in_features; c++) {
-                                    // t.dims[0] is out_features, t.dims[1] is in_features
-                                    dst_ptr[r * in_features + c] = buffer_f[c * out_features + r];
+                            // File stores tensor as (t.dims[0]=rows, t.dims[1]=cols) in row-major
+                            // dst has shape (dst->ne[0]=cols, dst->ne[1]=rows) - already swapped
+                            // Element [r, c] from file goes to [c, r] in dst
+                            int rows = (int)t.dims[0];
+                            int cols = (int)t.dims[1];
+                            for (int r = 0; r < rows; r++) {
+                                for (int c = 0; c < cols; c++) {
+                                    dst_ptr[c * rows + r] = buffer_f[r * cols + c];
                                 }
                             }
                         } else {
@@ -365,6 +366,7 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
 
 // Helper to extract layer index from tensor name
 // Handles both "model.h.0.xxx" and "blk.0.xxx" patterns
+// Returns SIZE_MAX if not a layer tensor (e.g., token_embd.weight, output_norm.weight)
 static size_t extract_layer_idx(const std::string& name) {
     // Find .h. pattern (HuggingFace style)
     size_t h_pos = name.find(".h.");
@@ -384,7 +386,7 @@ static size_t extract_layer_idx(const std::string& name) {
             return std::stoi(name.substr(start, end - start));
         }
     }
-    return 0;
+    return SIZE_MAX;  // Not a layer tensor - use SIZE_MAX as sentinel
 }
 
 // FP16 to FP32 conversion
@@ -529,7 +531,7 @@ void GPT2Model::build_graph(
 }
 
 void GPT2Model::compute() {
-    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+    ggml_backend_t backend = ggml_backend_cpu_init(NULL);
 
     if (!backend) {
         std::cerr << "Failed to initialize GGML CPU backend" << std::endl;
