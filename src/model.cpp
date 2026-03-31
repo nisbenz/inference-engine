@@ -264,24 +264,20 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                 // GGUF/llama.cpp stores 2D tensors in row-major: [rows, cols]
                 // GGML uses column-major: element [r,c] at data[c*ne[0] + r]
                 //
-                // In GGUF file: t.dims[0] = rows, t.dims[1] = cols (row-major)
-                // In GGML tensor: dst->ne[0] = cols, dst->ne[1] = rows (column-major)
+                // IMPORTANT: ggml_mul_mat already implicitly transposes its first argument (W^T @ x).
+                // Pre-transposing during loading + ggml_mul_mat's implicit transpose = double transpose = CORRUPTED.
                 //
-                // If file is [dst_ne[1], dst_ne[0]]: src[rows=A,cols=B] -> dst[cols=A,rows=B] = TRANSPOSE
-                // If file is [dst_ne[0], dst_ne[1]]: src[rows=A,cols=B] -> dst[cols=A,rows=B] = SAME (no transpose)
+                // Only transpose when GGUF file stores [dst_ne[1], dst_ne[0]] which means
+                // the file has the TRANSPOSE of what GGML tensor has.
+                //
+                // Square matrices [N, N]: transpose is identity, skip to avoid corruption.
                 bool needs_transpose = false;
-                if (t.n_dims == 2) {
+                if (t.n_dims == 2 && t.dims[0] != t.dims[1]) {
+                    // Only transpose if NOT square AND dimensions are swapped (file [B,A] -> GGML [A,B])
                     if (t.dims[0] == (uint64_t)dst->ne[1] && t.dims[1] == (uint64_t)dst->ne[0]) {
-                        needs_transpose = true;  // File is [B, A], need [A, B] -> transpose
+                        needs_transpose = true;
                     }
-                    // If t.dims[0] == dst->ne[0] && t.dims[1] == dst->ne[1], no transpose needed
                 }
-
-                // [DEBUG] Print dimension mapping for ALL layers to verify global corruption
-                std::cout << "[DEBUG] Tensor " << t.name << " file_dims=[" << t.dims[0] << "," << t.dims[1] 
-                          << "] dst_ne=[" << dst->ne[0] << "," << dst->ne[1] 
-                          << "] transposed=" << (needs_transpose ? "YES" : "NO") << std::endl;
-
 
                 if (expected_nbytes == actual_nbytes || t.type == GGUF_TID_Q4_K || t.type == GGUF_TID_Q8_0_ALT || t.type == GGUF_TID_BF16 || t.type == GGUF_TID_F16) {
                     
@@ -307,15 +303,15 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                         std::cout << "  Warning: Q4_K tensor '" << t.name << "' needs dequantization, using random" << std::endl;
                         failed++;
                     } else if (t.type == GGUF_TID_Q8_0_ALT) {
-                        // Q8_0 variant (type 30): 2-byte scale (float16) + 32 int8 values per block
+                        // Q8_0 (type 30): 2-byte scale (int16, little-endian) + 32 int8 values per block
                         std::vector<uint8_t> qdata(actual_nbytes);
                         read_tensor_data(gguf, t, qdata.data(), actual_nbytes);
                         size_t n_blocks = actual_nbytes / 34;  // 2 bytes scale + 32 bytes data
                         size_t j = 0;
                         for (size_t b = 0; b < n_blocks; b++) {
-                            // Read scale (float16, 2 bytes, little-endian)
-                            uint16_t scale_bits = qdata[b * 34] | (qdata[b * 34 + 1] << 8);
-                            float scale = fp16_to_fp32(scale_bits);
+                            // Read scale as int16 (little-endian), convert to float
+                            int16_t scale_i16 = (int16_t)(qdata[b * 34] | (qdata[b * 34 + 1] << 8));
+                            float scale = (float)scale_i16 / 256.0f;
                             // Read 32 quantized values
                             for (int i = 0; i < 32; i++) {
                                 int8_t val = (int8_t)qdata[b * 34 + 2 + i];
@@ -363,32 +359,6 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
         }
 
         std::cout << "\nLoaded " << loaded << " tensors, " << failed << " failed/skipped" << std::endl;
-
-        // Debug: verify wte_ weights are non-zero and reasonable
-        {
-            const float* wte_data = (const float*)wte_->data;
-            float wte_sum = 0, wte_max = 0;
-            size_t non_zero = 0;
-            for (size_t i = 0; i < ggml_nelements(wte_); i++) {
-                wte_sum += std::abs(wte_data[i]);
-                wte_max = std::max(wte_max, std::abs(wte_data[i]));
-                if (wte_data[i] != 0.0f) non_zero++;
-            }
-            std::cout << "[DEBUG] wte_ stats: sum=" << wte_sum << " max=" << wte_max
-                      << " non_zero=" << non_zero << "/" << ggml_nelements(wte_) << std::endl;
-
-            // Check multiple token embeddings
-            // Token 1917 = " red", token 1914 = " blue" (space prefix is GPT-2 convention)
-            // Token 445 = "red" (without space)
-            for (int tok_id : {1917, 1914, 445, 2330, 290}) {
-                // In GGML column-major: element [r, c] is at data[c * ne[0] + r]
-                // For token t at column t, embedding dims are [0..767]
-                float* emb = (float*)&wte_data[tok_id * N_EMBD];
-                float emb_sum = 0;
-                for (int i = 0; i < N_EMBD; i++) emb_sum += std::abs(emb[i]);
-                std::cout << "[DEBUG] wte_[" << tok_id << "] L1 sum=" << emb_sum << std::endl;
-            }
-        }
 
         fclose(gguf.fp);
         std::cout << "GGUF model loaded successfully" << std::endl;
