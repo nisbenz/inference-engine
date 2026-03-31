@@ -257,6 +257,9 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
 
             if (dst) {
                 // Calculate expected size
+                size_t expected_nbytes = ggml_nbytes(dst);
+                size_t actual_nbytes = gguf_tensor_nbytes(t);
+
                 // Allow generic transpose if dimensions are inverted from expectation
                 bool needs_transpose = false;
                 if (t.n_dims == 2 && t.dims[0] != (uint64_t)dst->ne[0] && t.dims[1] == (uint64_t)dst->ne[0]) {
