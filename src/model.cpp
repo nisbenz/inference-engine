@@ -531,7 +531,7 @@ void GPT2Model::build_graph(
 }
 
 void GPT2Model::compute() {
-    ggml_backend_t backend = ggml_backend_cpu_init(NULL);
+    ggml_backend_t backend = ggml_backend_cpu_init();
 
     if (!backend) {
         std::cerr << "Failed to initialize GGML CPU backend" << std::endl;
