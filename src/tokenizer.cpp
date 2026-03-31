@@ -245,30 +245,27 @@ bool GPT2Tokenizer::load(const std::string& vocab_path, const std::string& merge
 std::vector<int> GPT2Tokenizer::encode(const std::string& text) {
     std::vector<int> result;
 
-    // Step 1: Regex chunking
+    // Step 1: Regex chunking - split text into tokens matching the GPT-2 pattern
     std::sregex_iterator it(text.begin(), text.end(), pat_);
     std::sregex_iterator end;
 
     while (it != end) {
         std::string chunk = it->str();
 
-        // Step 2: UTF-8 encode each character to bytes
+        // Step 2: UTF-8 encode to raw bytes
         std::vector<unsigned char> bytes;
         for (size_t i = 0; i < chunk.size(); ) {
             unsigned char c = (unsigned char)chunk[i];
             if (c < 0x80) {
-                // ASCII
                 bytes.push_back(c);
                 i++;
             } else if ((c & 0xE0) == 0xC0) {
-                // 2-byte UTF-8
                 if (i + 1 < chunk.size()) {
                     bytes.push_back(c);
                     bytes.push_back((unsigned char)chunk[i + 1]);
                 }
                 i += 2;
             } else if ((c & 0xF0) == 0xE0) {
-                // 3-byte UTF-8
                 if (i + 2 < chunk.size()) {
                     bytes.push_back(c);
                     bytes.push_back((unsigned char)chunk[i + 1]);
@@ -276,7 +273,6 @@ std::vector<int> GPT2Tokenizer::encode(const std::string& text) {
                 }
                 i += 3;
             } else if ((c & 0xF8) == 0xF0) {
-                // 4-byte UTF-8
                 if (i + 3 < chunk.size()) {
                     bytes.push_back(c);
                     bytes.push_back((unsigned char)chunk[i + 1]);
@@ -290,22 +286,52 @@ std::vector<int> GPT2Tokenizer::encode(const std::string& text) {
             }
         }
 
-        // Step 3: Convert to token IDs (base bytes become their byte values)
-        // This is a simplification - real GPT-2 vocab has 50257 tokens
-        // Base tokens 0-255 are raw bytes, 256-289 are special (GPT-2 encoding bytes)
-        // Then 290+ are merged tokens
-
-        // For now, just use byte values directly
+        // Step 3: Convert bytes to token IDs (base tokens 0-255)
+        // In GPT-2's byte-level BPE, bytes 0-255 map directly to token IDs 0-255
+        std::vector<int> token_ids;
+        token_ids.reserve(bytes.size());
         for (unsigned char b : bytes) {
-            result.push_back((int)b);
+            auto it_id = byte_to_id_.find((int)b);
+            if (it_id != byte_to_id_.end()) {
+                token_ids.push_back(it_id->second);
+            } else {
+                // Fallback: use byte value directly
+                token_ids.push_back((int)b);
+            }
         }
+
+        // Step 4: Apply BPE merges iteratively
+        // Standard BPE: repeatedly find the highest-priority adjacent pair and merge
+        while (token_ids.size() >= 2) {
+            // Find the pair with the lowest merge rank (highest priority)
+            int best_rank = INT_MAX;
+            int best_pos = -1;
+
+            for (size_t i = 0; i < token_ids.size() - 1; i++) {
+                std::pair<int, int> pair = {token_ids[i], token_ids[i + 1]};
+                auto merge_it = merges_.find(pair);
+                if (merge_it != merges_.end()) {
+                    if (merge_it->second < best_rank) {
+                        best_rank = merge_it->second;
+                        best_pos = (int)i;
+                    }
+                }
+            }
+
+            // If no valid merge exists, stop merging this chunk
+            if (best_pos == -1) break;
+
+            // Perform the merge: replace pair at best_pos with merged token
+            int new_token = merges_[{token_ids[best_pos], token_ids[best_pos + 1]}];
+            token_ids.erase(token_ids.begin() + best_pos);
+            token_ids[best_pos] = new_token;
+        }
+
+        // Append the final token IDs for this chunk
+        result.insert(result.end(), token_ids.begin(), token_ids.end());
 
         ++it;
     }
-
-    // Step 4: Apply BPE merges (simplified)
-    // Real BPE would iteratively merge pairs based on merge order
-    // This is where the complexity lies
 
     return result;
 }

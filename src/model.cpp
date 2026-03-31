@@ -418,13 +418,13 @@ std::vector<float> GPT2Model::forward(
 
     if (logits_tensor_) {
         // logits_tensor_: ne[0]=VOCAB_SIZE, ne[1]=seq_len
-        // Column-major: element (v, s) at offset s * VOCAB_SIZE + v
-        // Last seq position s = seq_len - 1
+        // GGML/ggml_cuda uses row-major storage: element [v,s] at offset v * seq_len + s
+        // Last sequence position s = seq_len - 1
         int seq_len = input_ids.size();
-        int last_idx = (seq_len - 1) * VOCAB_SIZE;
         const float* logits_data = (const float*)logits_tensor_->data;
-        for (int i = 0; i < VOCAB_SIZE; i++) {
-            logits[i] = logits_data[last_idx + i];
+        for (int v = 0; v < VOCAB_SIZE; v++) {
+            // Row-major: offset = v * seq_len + (seq_len - 1)
+            logits[v] = logits_data[v * seq_len + (seq_len - 1)];
         }
     }
 
