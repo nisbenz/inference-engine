@@ -342,12 +342,17 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                     if (read_success) {
                         auto* dst_ptr = (float*)dst->data;
                         if (needs_transpose) {
-                            int cols_file = (int)t.dims[0];
-                            int rows_file = (int)t.dims[1];
-                            // Transpose from buffer_f (rows_file x cols_file) to dst_ptr (cols_file x rows_file)
-                            for (int r = 0; r < rows_file; r++) {
-                                for (int c = 0; c < cols_file; c++) {
-                                    dst_ptr[c * rows_file + r] = buffer_f[r * cols_file + c];
+                            // PyTorch Conv1D physically stores memory as [in_features, out_features]
+                            // where out_features is the contiguous fast dimension.
+                            // GGML linear layers require in_features to be the contiguous fast dimension.
+                            // Because GGUF conversion scripts often mislabel t.dims for Conv1D, 
+                            // we bypass t.dims entirely and read the physical memory relying on dst_ne.
+                            int in_features = (int)dst->ne[0];
+                            int out_features = (int)dst->ne[1];
+
+                            for (int y = 0; y < in_features; y++) {
+                                for (int x = 0; x < out_features; x++) {
+                                    dst_ptr[x * in_features + y] = buffer_f[y * out_features + x];
                                 }
                             }
                         } else {
