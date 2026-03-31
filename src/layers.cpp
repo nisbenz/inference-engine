@@ -2,12 +2,7 @@
 #include <cmath>
 #include <iostream>
 
-// Helper to create a scalar tensor (for adding constants)
-static inline ggml_tensor* ggml_new_scalar(ggml_context* ctx, float value) {
-    ggml_tensor* t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-    ((float*)t->data)[0] = value;
-    return t;
-}
+// Removed ggml_new_scalar helper since native ops are safer
 
 // ============== LayerNorm ==============
 
@@ -33,14 +28,8 @@ ggml_tensor* RMSNorm::forward(ggml_context* ctx, ggml_tensor* x) {
 // ============== GELU ==============
 
 ggml_tensor* GELU::forward(ggml_context* ctx, ggml_tensor* x) {
-    // GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    ggml_tensor* x3 = ggml_mul(ctx, ggml_mul(ctx, x, x), x);
-    ggml_tensor* inner = ggml_add(ctx, x, ggml_scale(ctx, x3, GELU::GELU_A));
-    ggml_tensor* tanh_arg = ggml_scale(ctx, inner, GELU::GELU_SQRT2_OVER_PI);
-    ggml_tensor* tanh_result = ggml_tanh(ctx, tanh_arg);
-    ggml_tensor* one_plus_tanh = ggml_add(ctx, tanh_result, ggml_new_scalar(ctx, 1.0f));
-    ggml_tensor* result = ggml_scale(ctx, ggml_mul(ctx, x, one_plus_tanh), 0.5f);
-    return result;
+    // Native GGML GELU operator prevents scalar broadcasting memory leaks
+    return ggml_gelu(ctx, x);
 }
 
 // ============== Attention ==============
@@ -191,13 +180,7 @@ FFN::FFN()
 {}
 
 ggml_tensor* FFN::gelu(ggml_context* ctx, ggml_tensor* x) {
-    ggml_tensor* x3 = ggml_mul(ctx, ggml_mul(ctx, x, x), x);
-    ggml_tensor* inner = ggml_add(ctx, x, ggml_scale(ctx, x3, GELU::GELU_A));
-    ggml_tensor* tanh_arg = ggml_scale(ctx, inner, GELU::GELU_SQRT2_OVER_PI);
-    ggml_tensor* tanh_result = ggml_tanh(ctx, tanh_arg);
-    ggml_tensor* one_plus_tanh = ggml_add(ctx, tanh_result, ggml_new_scalar(ctx, 1.0f));
-    ggml_tensor* result = ggml_scale(ctx, ggml_mul(ctx, x, one_plus_tanh), 0.5f);
-    return result;
+    return ggml_gelu(ctx, x);
 }
 
 ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
