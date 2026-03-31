@@ -260,19 +260,31 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                 size_t expected_nbytes = ggml_nbytes(dst);
                 size_t actual_nbytes = gguf_tensor_nbytes(t);
 
+                // Check if dimensions are transposed
+                bool needs_transpose = false;
+                if (t.n_dims == 2 && t.dims[0] != (uint64_t)dst->ne[0] && t.dims[1] == (uint64_t)dst->ne[0]) {
+                    needs_transpose = true;
+                    // Note: actual_nbytes mathematically equals expected_nbytes since in*out == out*in
+                }
+
                 if (expected_nbytes == actual_nbytes || t.type == GGUF_TID_Q4_K || t.type == GGUF_TID_Q8_0_ALT || t.type == GGUF_TID_BF16 || t.type == GGUF_TID_F16) {
+                    
+                    std::vector<float> buffer_f(ggml_nelements(dst));
+                    bool read_success = false;
+
                     // Type matches or quantized (will be handled separately)
                     if (t.type == GGUF_TID_F32) {
-                        read_tensor_data(gguf, t, dst->data, actual_nbytes);
+                        read_tensor_data(gguf, t, buffer_f.data(), actual_nbytes);
+                        read_success = true;
                         loaded++;
                     } else if (t.type == GGUF_TID_F16) {
                         // Convert F16 to F32
                         std::vector<uint16_t> f16_data(actual_nbytes / 2);
                         read_tensor_data(gguf, t, f16_data.data(), actual_nbytes);
-                        auto* dst_f = (float*)dst->data;
                         for (size_t j = 0; j < f16_data.size(); j++) {
-                            dst_f[j] = fp16_to_fp32(f16_data[j]);
+                            buffer_f[j] = fp16_to_fp32(f16_data[j]);
                         }
+                        read_success = true;
                         loaded++;
                     } else if (t.type == GGUF_TID_Q4_K) {
                         // Q4_K_M quantization - needs special dequantization
@@ -282,7 +294,6 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                         // Q8_0 variant (type 30): 2-byte scale (float16) + 32 int8 values per block
                         std::vector<uint8_t> qdata(actual_nbytes);
                         read_tensor_data(gguf, t, qdata.data(), actual_nbytes);
-                        auto* dst_f = (float*)dst->data;
                         size_t n_blocks = actual_nbytes / 34;  // 2 bytes scale + 32 bytes data
                         size_t j = 0;
                         for (size_t b = 0; b < n_blocks; b++) {
@@ -292,22 +303,39 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                             // Read 32 quantized values
                             for (int i = 0; i < 32; i++) {
                                 int8_t val = (int8_t)qdata[b * 34 + 2 + i];
-                                dst_f[j++] = val * scale;
+                                buffer_f[j++] = val * scale;
                             }
                         }
+                        read_success = true;
                         loaded++;
                     } else if (t.type == GGUF_TID_BF16) {
                         // BF16 type - convert to F32
                         std::vector<uint16_t> bf16_data(actual_nbytes / 2);
                         read_tensor_data(gguf, t, bf16_data.data(), actual_nbytes);
-                        auto* dst_f = (float*)dst->data;
                         for (size_t j = 0; j < bf16_data.size(); j++) {
-                            dst_f[j] = bf16_to_fp32(bf16_data[j]);
+                            buffer_f[j] = bf16_to_fp32(bf16_data[j]);
                         }
+                        read_success = true;
                         loaded++;
                     } else {
                         std::cout << "  Warning: Unsupported type " << t.type << " for tensor '" << t.name << "'" << std::endl;
                         failed++;
+                    }
+                    
+                    if (read_success) {
+                        auto* dst_ptr = (float*)dst->data;
+                        if (needs_transpose) {
+                            int cols_file = (int)t.dims[0];
+                            int rows_file = (int)t.dims[1];
+                            // Transpose from buffer_f (rows_file x cols_file) to dst_ptr (cols_file x rows_file)
+                            for (int r = 0; r < rows_file; r++) {
+                                for (int c = 0; c < cols_file; c++) {
+                                    dst_ptr[c * rows_file + r] = buffer_f[r * cols_file + c];
+                                }
+                            }
+                        } else {
+                            std::memcpy(dst_ptr, buffer_f.data(), buffer_f.size() * sizeof(float));
+                        }
                     }
                 } else {
                     std::cout << "  Size mismatch for '" << t.name << "': expected " << expected_nbytes << " got " << actual_nbytes << std::endl;

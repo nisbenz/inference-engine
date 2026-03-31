@@ -11,13 +11,12 @@
 // Using POSIX character classes for C++ regex compatibility
 static const char* GPT2_REGEX_PATTERN =
     R"('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:space:][[:alnum:]]]+|[[:space:]]+)";
-
 GPT2Tokenizer::GPT2Tokenizer() {
     // GPT-2 byte-level BPE uses 50257 tokens (256 byte tokens + 50k merged)
     byte_to_id_.reserve(256);
 
-    // Initialize byte to id mapping (same as GPT-2)
-    // This maps raw bytes 0-255 to token IDs 0-255
+    // Initialize byte to id mapping (will be populated fully in load)
+    // Fallback: This maps raw bytes 0-255 to token IDs 0-255 if not in vocab
     for (int i = 0; i < 256; i++) {
         byte_to_id_[i] = i;
     }
@@ -161,8 +160,13 @@ bool GPT2Tokenizer::load(const std::string& vocab_path, const std::string& merge
         }
 
         id_to_token_[id] = decoded;
+        
+        // Correct base byte mapping
+        // If decoded is exactly 1 byte long, it means this token ID directly maps to a raw byte natively
+        if (decoded.size() == 1) {
+            byte_to_id_[(unsigned char)decoded[0]] = id;
+        }
     }
-
     std::cout << "Loaded " << id_to_token_.size() << " vocab entries" << std::endl;
 
     // Parse merges file
