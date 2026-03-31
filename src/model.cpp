@@ -260,22 +260,9 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                 size_t expected_nbytes = ggml_nbytes(dst);
                 size_t actual_nbytes = gguf_tensor_nbytes(t);
 
-                // Check if dimensions are transposed
+                // The conversion scripts pre-transpose Conv1D to Linear layout internally!
+                // So the GGUF t.dims directly and correctly match dst_ne dimensions.
                 bool needs_transpose = false;
-                if (t.n_dims == 2) {
-                    // All GPT-2 linear transformations (c_attn, c_proj, c_fc) are HuggingFace Conv1D. 
-                    // Conv1D stores memory as [in_features, out_features] where out_features is contiguous.
-                    // ggml_mul_mat requires in_features to be contiguous. Thus, we MUST transpose them all.
-                    if (t.name.find("blk.") != std::string::npos && 
-                        t.name.find(".weight") != std::string::npos && 
-                        t.name.find("norm") == std::string::npos) {
-                        needs_transpose = true;
-                    } 
-                    // Fallback for statically inverted dimensions
-                    else if (t.dims[0] != (uint64_t)dst->ne[0] && t.dims[1] == (uint64_t)dst->ne[0]) {
-                        needs_transpose = true;
-                    } 
-                }
 
                 // [DEBUG] Print dimension mapping for first layer to verify
                 if (t.name.find("blk.0.") != std::string::npos) {
@@ -342,17 +329,12 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                     if (read_success) {
                         auto* dst_ptr = (float*)dst->data;
                         if (needs_transpose) {
-                            // PyTorch Conv1D physically stores memory as [in_features, out_features]
-                            // where out_features is the contiguous fast dimension.
-                            // GGML linear layers require in_features to be the contiguous fast dimension.
-                            // Because GGUF conversion scripts often mislabel t.dims for Conv1D, 
-                            // we bypass t.dims entirely and read the physical memory relying on dst_ne.
-                            int in_features = (int)dst->ne[0];
-                            int out_features = (int)dst->ne[1];
-
-                            for (int y = 0; y < in_features; y++) {
-                                for (int x = 0; x < out_features; x++) {
-                                    dst_ptr[x * in_features + y] = buffer_f[y * out_features + x];
+                            // Dead fallback path
+                            int cols_file = (int)t.dims[0];
+                            int rows_file = (int)t.dims[1];
+                            for (int r = 0; r < rows_file; r++) {
+                                for (int c = 0; c < cols_file; c++) {
+                                    dst_ptr[c * rows_file + r] = buffer_f[r * cols_file + c];
                                 }
                             }
                         } else {
@@ -425,21 +407,10 @@ static float fp16_to_fp32(uint16_t f16) {
 // BF16 (Brain Float 16) to FP32 conversion
 // BF16: 1 sign bit, 8 exponent bits, 7 mantissa bits
 static float bf16_to_fp32(uint16_t bf16) {
-    unsigned int sign = (bf16 >> 15) & 0x1;
-    unsigned int exp = (bf16 >> 7) & 0xff;
-    unsigned int mant = bf16 & 0x7f;
-
-    if (exp == 0) {
-        if (mant == 0) return sign ? -0.0f : 0.0f;
-        else return sign ? -pow(2, -126) * (mant / 128.0f) : pow(2, -126) * (mant / 128.0f);
-    } else if (exp == 255) {
-        if (mant == 0) return sign ? -INFINITY : INFINITY;
-        else return NAN;
-    }
-
-    int32_t e = exp - 127;
-    float m = 1.0f + mant / 128.0f;
-    return sign ? -pow(2, e) * m : pow(2, e) * m;
+    uint32_t val = (uint32_t)bf16 << 16;
+    float result;
+    std::memcpy(&result, &val, sizeof(float));
+    return result;
 }
 
 bool GPT2Model::load_ggml_weights(const std::string& path) {
@@ -573,8 +544,6 @@ void GPT2Model::build_graph(
 }
 
 void GPT2Model::compute() {
-    // Use CPU backend since tensors are allocated in CPU memory (no_alloc=false)
-    // Using GPU backend would require ggml_backend_alloc_ctx_tensors for GPU memory
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
 
     if (!backend) {
