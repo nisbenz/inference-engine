@@ -260,10 +260,21 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                 size_t expected_nbytes = ggml_nbytes(dst);
                 size_t actual_nbytes = gguf_tensor_nbytes(t);
 
-                // Allow generic transpose if dimensions are inverted from expectation
+                // Transpose condition:
+                // GGUF/llama.cpp stores 2D tensors in row-major: [rows, cols]
+                // GGML uses column-major: element [r,c] at data[c*ne[0] + r]
+                //
+                // In GGUF file: t.dims[0] = rows, t.dims[1] = cols (row-major)
+                // In GGML tensor: dst->ne[0] = cols, dst->ne[1] = rows (column-major)
+                //
+                // If file is [dst_ne[1], dst_ne[0]]: src[rows=A,cols=B] -> dst[cols=A,rows=B] = TRANSPOSE
+                // If file is [dst_ne[0], dst_ne[1]]: src[rows=A,cols=B] -> dst[cols=A,rows=B] = SAME (no transpose)
                 bool needs_transpose = false;
-                if (t.n_dims == 2 && t.dims[0] != (uint64_t)dst->ne[0] && t.dims[1] == (uint64_t)dst->ne[0]) {
-                    needs_transpose = true;
+                if (t.n_dims == 2) {
+                    if (t.dims[0] == (uint64_t)dst->ne[1] && t.dims[1] == (uint64_t)dst->ne[0]) {
+                        needs_transpose = true;  // File is [B, A], need [A, B] -> transpose
+                    }
+                    // If t.dims[0] == dst->ne[0] && t.dims[1] == dst->ne[1], no transpose needed
                 }
 
                 // [DEBUG] Print dimension mapping for ALL layers to verify global corruption
@@ -365,11 +376,18 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
             }
             std::cout << "[DEBUG] wte_ stats: sum=" << wte_sum << " max=" << wte_max
                       << " non_zero=" << non_zero << "/" << ggml_nelements(wte_) << std::endl;
-            // Check first token embedding (token 445 = "red")
-            float* emb_red = (float*)&wte_data[445 * N_EMBD];
-            float emb_sum = 0;
-            for (int i = 0; i < N_EMBD; i++) emb_sum += std::abs(emb_red[i]);
-            std::cout << "[DEBUG] wte_[445] (red) L1 sum=" << emb_sum << std::endl;
+
+            // Check multiple token embeddings
+            // Token 1917 = " red", token 1914 = " blue" (space prefix is GPT-2 convention)
+            // Token 445 = "red" (without space)
+            for (int tok_id : {1917, 1914, 445, 2330, 290}) {
+                // In GGML column-major: element [r, c] is at data[c * ne[0] + r]
+                // For token t at column t, embedding dims are [0..767]
+                float* emb = (float*)&wte_data[tok_id * N_EMBD];
+                float emb_sum = 0;
+                for (int i = 0; i < N_EMBD; i++) emb_sum += std::abs(emb[i]);
+                std::cout << "[DEBUG] wte_[" << tok_id << "] L1 sum=" << emb_sum << std::endl;
+            }
         }
 
         fclose(gguf.fp);
@@ -474,9 +492,8 @@ std::vector<float> GPT2Model::forward(
 
     if (logits_tensor_) {
         // logits_tensor_: ne[0]=VOCAB_SIZE, ne[1]=seq_len
-        // GGML uses row-major storage where ne[0] is the fast dimension.
-        // Element [v, s] (where v is vocab index, s is sequence index)
-        // is at offset s * ne[0] + v = s * VOCAB_SIZE + v
+        // In GGML column-major: element [r, c] is at data[c * ne[0] + r]
+        // So element [vocab, seq] = data[seq * VOCAB_SIZE + vocab]
         int seq_len = input_ids.size();
         const float* logits_data = (const float*)logits_tensor_->data;
         for (int v = 0; v < VOCAB_SIZE; v++) {
@@ -495,6 +512,17 @@ std::vector<float> GPT2Model::forward(
             std::cout << "token=" << top_logits[i].second << "(" << tokenizer_.decode({top_logits[i].second}) << ") logit=" << top_logits[i].first << " ";
         }
         std::cout << std::endl;
+    }
+
+    // Debug: verify wte_ embedding for first token
+    {
+        const float* wte_data = (const float*)wte_->data;
+        int first_token = input_ids[0];
+        // Embedding for token t starts at data[t * ne[0]] in GGML column-major
+        const float* emb_ptr = &wte_data[first_token * N_EMBD];
+        float emb_sum = 0;
+        for (int i = 0; i < N_EMBD; i++) emb_sum += emb_ptr[i];
+        std::cout << "[DEBUG] First token=" << first_token << " embedding L1=" << emb_sum << std::endl;
     }
 
     // Free the temporary context
@@ -520,16 +548,21 @@ void GPT2Model::build_graph(
     ggml_tensor* tokens_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
     std::memcpy(tokens_tensor->data, input_ids.data(), seq_len * sizeof(int32_t));
 
-    // Get input embeddings: wte_ is stored with ne[0]=N_EMBD, ne[1]=VOCAB_SIZE
-    // In GGML column-major, element [r, c] = data[c * N_EMBD + r]
-    // For token t, embedding is at offsets t*N_EMBD through t*N_EMBD+N_EMBD-1
-    // But data[t*N_EMBD + r] = data[c=N_EMBD + r] which is NOT contiguous!
-    // ggml_get_rows extracts "rows" which should be [r=0..N_EMBD-1] for col t
-    // BUT GGML stores as [c0_r0, c0_r1, ..., c0_r767, c1_r0, ...] (column-major)
-    // So row t is NOT contiguous - it's every N_EMBD-th element!
+    // wte_: ne[0]=N_EMBD, ne[1]=VOCAB_SIZE, stored column-major in GGML
+    // In GGML column-major, element [r, c] is at data[c * ne[0] + r]
+    // For token t, all embedding dimensions are at column t:
+    //   dim 0: data[t * ne[0] + 0]
+    //   dim 1: data[t * ne[0] + 1]
+    //   ...
+    //   dim 767: data[t * ne[0] + 767]
+    // So the embedding for token t is NOT contiguous in memory!
     //
-    // FIX: Change allocation so ne[0]=VOCAB_SIZE, ne[1]=N_EMBD
-    // Then row t IS contiguous at offsets [t*N_EMBD .. (t+1)*N_EMBD - 1]
+    // ggml_get_rows extracts rows 0..ne[1]-1 (the columns in GGML terminology)
+    // For each token index i, it extracts elements [i*ne[0] .. i*ne[0]+ne[0]-1]
+    // which IS the correct embedding for token i!
+    //
+    // So actually ggml_get_rows SHOULD work correctly with column-major storage.
+    // Let me verify this is actually working.
     ggml_tensor* input_embd = ggml_get_rows(ctx0, wte_, tokens_tensor);
 
     // Build positional indices tensor
