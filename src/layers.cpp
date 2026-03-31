@@ -93,7 +93,9 @@ ggml_tensor* Attention::forward(
     // ggml_mul_mat(W, x) = W^T @ x; both ne[0]=n_embd
     // Result: ne[0]=3*n_embd, ne[1]=seq_len
     ggml_tensor* qkv = ggml_mul_mat(ctx, c_attn_weight, x);
-    qkv = ggml_add(ctx, qkv, c_attn_bias);
+    ggml_tensor* repeated_attn_bias = ggml_repeat(ctx, c_attn_bias, qkv);
+    ggml_tensor* qkv_out = ggml_add(ctx, qkv, repeated_attn_bias);
+    qkv = qkv_out;
 
     // ---- Split Q, K, V along ne[0] ----
     // Each chunk: ne[0]=n_embd, ne[1]=seq_len
@@ -126,9 +128,9 @@ ggml_tensor* Attention::forward(
     scores = ggml_scale(ctx, scores, 1.0f / std::sqrt((float)head_dim));
 
     // ---- Causal mask ----
-    // 2D mask (seq_len, seq_len) broadcasts over ne[2]=n_heads
     ggml_tensor* mask = causal_mask(ctx, seq_len);
-    scores = ggml_add(ctx, scores, mask);
+    ggml_tensor* repeated_mask = ggml_repeat(ctx, mask, scores);
+    scores = ggml_add(ctx, scores, repeated_mask);
 
     // ---- Softmax along ne[0] (over kv positions per query) ----
     ggml_tensor* attn_weights = ggml_soft_max(ctx, scores);
@@ -157,7 +159,8 @@ ggml_tensor* Attention::forward(
     // ggml_mul_mat(W, x) = W^T @ x; both ne[0]=n_embd
     // Result: ne[0]=n_embd, ne[1]=seq_len
     ggml_tensor* out = ggml_mul_mat(ctx, c_proj_weight, attn_out);
-    out = ggml_add(ctx, out, c_proj_bias);
+    ggml_tensor* repeated_proj_bias = ggml_repeat(ctx, c_proj_bias, out);
+    out = ggml_add(ctx, out, repeated_proj_bias);
 
     ggml_build_forward_expand(gf, out);
     return out;
@@ -190,7 +193,8 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // ggml_mul_mat(W, x) = W^T @ x; both ne[0]=n_embd
     // Result: ne[0]=n_ffn, ne[1]=seq_len
     ggml_tensor* up = ggml_mul_mat(ctx, c_fc_weight, x);
-    up = ggml_add(ctx, up, c_fc_bias);
+    ggml_tensor* repeated_fc_bias = ggml_repeat(ctx, c_fc_bias, up);
+    up = ggml_add(ctx, up, repeated_fc_bias);
 
     // GELU activation
     ggml_tensor* activated = gelu(ctx, up);
@@ -199,7 +203,8 @@ ggml_tensor* FFN::forward(ggml_context* ctx, ggml_cgraph* gf, ggml_tensor* x) {
     // ggml_mul_mat(W, x) = W^T @ x; both ne[0]=n_ffn
     // Result: ne[0]=n_embd, ne[1]=seq_len
     ggml_tensor* down = ggml_mul_mat(ctx, c_proj_weight, activated);
-    down = ggml_add(ctx, down, c_proj_bias);
+    ggml_tensor* repeated_down_bias = ggml_repeat(ctx, c_proj_bias, down);
+    down = ggml_add(ctx, down, repeated_down_bias);
 
     return down;
 }
@@ -285,11 +290,12 @@ ggml_tensor* layer_norm(
     ggml_tensor* beta,
     float eps
 ) {
-    // x: ne[0]=n_embd, ne[1]=seq_len
-    // ggml_norm normalizes along ne[0] per row — exactly LayerNorm
     ggml_tensor* x_norm = ggml_norm(ctx, x, eps);
-    ggml_tensor* scaled = ggml_mul(ctx, x_norm, gamma);
-    ggml_tensor* result = ggml_add(ctx, scaled, beta);
+    // Explicitly repeat beta across seq_len axis for structured memory broadcasting!
+    ggml_tensor* repeated_gamma = ggml_repeat(ctx, gamma, x_norm);
+    ggml_tensor* scaled = ggml_mul(ctx, x_norm, repeated_gamma);
+    ggml_tensor* repeated_beta = ggml_repeat(ctx, beta, scaled);
+    ggml_tensor* result = ggml_add(ctx, scaled, repeated_beta);
     return result;
 }
 
