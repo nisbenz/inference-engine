@@ -66,10 +66,6 @@ struct Attention {
     // Initialize KV cache tensors
     void init_cache(ggml_context* ctx);
 
-    // Causal mask: prevent attending to future tokens
-    // token at position i can only attend to positions 0..i
-    static ggml_tensor* causal_mask(ggml_context* ctx, int seq_len);
-
     // Multi-head attention forward
     // x: input tensor (seq_len, n_embd)
     // position: current position in sequence

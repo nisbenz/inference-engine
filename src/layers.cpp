@@ -61,20 +61,6 @@ void Attention::init_cache(ggml_context* ctx) {
     ggml_set_name(v_cache, "v_cache");
 }
 
-ggml_tensor* Attention::causal_mask(ggml_context* ctx, int seq_len) {
-    // Causal mask: ne[0]=seq_len (kv), ne[1]=seq_len (query)
-    // mask[k,q] = 0 if k <= q, -inf if k > q
-    ggml_tensor* mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, seq_len, seq_len);
-    float* data = (float*)mask->data;
-    for (int q = 0; q < seq_len; q++) {
-        for (int k = 0; k < seq_len; k++) {
-            // Column-major: (k, q) at index q * seq_len + k
-            data[q * seq_len + k] = (k > q) ? -INFINITY : 0.0f;
-        }
-    }
-    return mask;
-}
-
 ggml_tensor* Attention::forward(
     ggml_context* ctx,
     ggml_cgraph* gf,
@@ -120,17 +106,16 @@ ggml_tensor* Attention::forward(
     V = ggml_permute(ctx, V, 0, 2, 1, 3);
 
     // ---- Attention scores ----
-    // ggml_mul_mat requires non-transposed first arg, so make K contiguous
     // ggml_mul_mat(K, Q) = K^T @ Q, batched over ne[2]=n_heads
     // Both ne[0]=head_dim; result: ne[0]=seq_len, ne[1]=seq_len, ne[2]=n_heads
-    ggml_tensor* K_cont = ggml_cont(ctx, K);
-    ggml_tensor* scores = ggml_mul_mat(ctx, K_cont, Q);
+    ggml_tensor* scores = ggml_mul_mat(ctx, K, Q);
     scores = ggml_scale(ctx, scores, 1.0f / std::sqrt((float)head_dim));
 
-    // ---- Causal mask ----
-    ggml_tensor* mask = causal_mask(ctx, seq_len);
-    ggml_tensor* repeated_mask = ggml_repeat(ctx, mask, scores);
-    scores = ggml_add(ctx, scores, repeated_mask);
+    // ---- Causal mask using ggml_diag_mask_inf ----
+    // position = n_past (number of tokens already processed in the full sequence)
+    // This masks future tokens: element at (row, col) where col > row + n_past gets -inf
+    // Official GGML pattern: ggml_diag_mask_inf(ctx, scores, n_past)
+    scores = ggml_diag_mask_inf(ctx, scores, position);
 
     // ---- Softmax along ne[0] (over kv positions per query) ----
     ggml_tensor* attn_weights = ggml_soft_max(ctx, scores);
