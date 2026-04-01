@@ -7,6 +7,7 @@ int run_attention_tests();
 int run_ffn_tests();
 int run_layer_norm_tests();
 int run_wte_diagnosis_tests(const char* gguf_path = nullptr);
+int run_forward_pass_tests();
 
 int main(int argc, char* argv[]) {
     std::cout << "==================================================" << std::endl;
@@ -20,6 +21,7 @@ int main(int argc, char* argv[]) {
     total_failures += run_attention_tests();
     total_failures += run_ffn_tests();
     total_failures += run_layer_norm_tests();
+    total_failures += run_forward_pass_tests();
 
     // WTE diagnosis tests - optionally pass path to GGUF model file
     const char* gguf_path = (argc > 1) ? argv[1] : nullptr;
