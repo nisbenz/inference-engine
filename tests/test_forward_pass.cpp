@@ -1199,12 +1199,12 @@ static void test_end_to_end() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main
+// Main entry point (callable from run_tests.cpp or standalone)
 // ─────────────────────────────────────────────────────────────────────────────
-int main() {
-    std::cout << "╔══════════════════════════════════════════╗\n";
-    std::cout << "║   Forward Pass Correctness Test Suite    ║\n";
-    std::cout << "╚══════════════════════════════════════════╝\n";
+int run_forward_pass_tests() {
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "Running Forward Pass Correctness Tests" << std::endl;
+    std::cout << "========================================" << std::endl;
 
     test_layernorm_identity();
     test_layernorm_known_values();
@@ -1223,20 +1223,13 @@ int main() {
     test_full_single_layer();
     test_end_to_end();
 
-    std::cout << "\n╔══════════════════════════════════════════╗\n";
-    std::cout << "║  Results: " << g_tests_passed << "/" << g_tests_run
-              << " checks passed";
-    int pad = 28 - (int)std::to_string(g_tests_passed).size()
-                  - (int)std::to_string(g_tests_run).size();
-    for (int i = 0; i < pad; i++) std::cout << ' ';
-    std::cout << "║\n";
+    std::cout << "\n========================================" << std::endl;
     if (g_tests_failed == 0) {
-        std::cout << "║         ALL TESTS PASSED ✓               ║\n";
+        std::cout << "All Forward Pass Tests PASSED" << std::endl;
     } else {
-        std::cout << "║  FAILED: " << g_tests_failed
-                  << " checks                        ║\n";
+        std::cout << "Some Forward Pass Tests FAILED" << std::endl;
     }
-    std::cout << "╚══════════════════════════════════════════╝\n";
+    std::cout << "========================================" << std::endl;
 
-    return g_tests_failed == 0 ? 0 : 1;
+    return g_tests_failed;
 }
