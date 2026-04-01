@@ -178,6 +178,108 @@ int test_q80_alt_dequantization() {
     return 0;
 }
 
+// Test: Read actual Q8_0 data from file and compare proper dequantization vs BF16 interpretation
+int test_q80_alt_actual_file(const char* gguf_path) {
+    print_test_header("test_q80_alt_actual_file");
+
+    if (!gguf_path) {
+        std::cout << "  No GGUF path provided, skipping" << std::endl;
+        return 0;
+    }
+
+    try {
+        GGUFFile gguf = load_gguf(gguf_path);
+
+        // Find token_embd.weight
+        GGUFTensorInfo* wte_info = nullptr;
+        for (auto& t : gguf.tensors) {
+            if (t.name == "token_embd.weight") {
+                wte_info = &t;
+                break;
+            }
+        }
+
+        if (!wte_info) {
+            std::cerr << "  ERROR: token_embd.weight not found!" << std::endl;
+            fclose(gguf.fp);
+            return 1;
+        }
+
+        std::cout << "  Tensor: " << wte_info->name << std::endl;
+        std::cout << "  Type: " << wte_info->type << " (Q8_0_ALT=" << GGUF_TID_Q8_0_ALT << ")" << std::endl;
+        std::cout << "  dims: [" << wte_info->dims[0] << ", " << wte_info->dims[1] << "]" << std::endl;
+
+        size_t n_elements = wte_info->dims[0] * wte_info->dims[1];
+        size_t nbytes = gguf_tensor_nbytes(*wte_info);
+        std::cout << "  Elements: " << n_elements << std::endl;
+        std::cout << "  Bytes in file: " << nbytes << std::endl;
+
+        // Q8_0 block: 34 bytes per 32 elements
+        size_t block_size = 32;
+        size_t n_blocks = n_elements / block_size;
+        size_t expected_q80_bytes = n_blocks * 34;
+        std::cout << "\n  Q8_0 analysis:" << std::endl;
+        std::cout << "    Blocks: " << n_blocks << std::endl;
+        std::cout << "    Expected bytes for Q8_0: " << expected_q80_bytes << std::endl;
+        std::cout << "    Actual bytes in file: " << nbytes << std::endl;
+
+        if (nbytes == expected_q80_bytes) {
+            std::cout << "    ✓ File matches Q8_0 format!" << std::endl;
+        } else {
+            std::cout << "    ✗ File does NOT match Q8_0 format" << std::endl;
+        }
+
+        // Read first few blocks and show the raw bytes
+        std::cout << "\n  First Q8_0 block raw bytes:" << std::endl;
+        std::vector<uint8_t> block_bytes(34);
+        fseek(gguf.fp, gguf.tensor_data_offset + wte_info->offset, SEEK_SET);
+        fread(block_bytes.data(), 1, 34, gguf.fp);
+
+        std::cout << "    Bytes 0-33: ";
+        for (int i = 0; i < 34; i++) {
+            printf("%02X ", block_bytes[i]);
+        }
+        std::cout << std::endl;
+
+        // Interpret as scale + 32 int8 values (CORRECT dequantization)
+        uint16_t scale_f16 = (uint16_t)(block_bytes[0] | (block_bytes[1] << 8));
+        unsigned int sign = (scale_f16 >> 15) & 0x1;
+        unsigned int exp = (scale_f16 >> 10) & 0x1f;
+        unsigned int mant = scale_f16 & 0x3ff;
+        int32_t e = (int32_t)exp - 15;
+        float m = 1.0f + mant / 1024.0f;
+        float scale = (sign ? -1.0f : 1.0f) * std::pow(2.0f, e) * m;
+        std::cout << "    Scale (FP16 0x" << std::hex << scale_f16 << std::dec << "): " << scale << std::endl;
+
+        std::cout << "    Proper Q8_0 dequantization (value = int8 * scale):" << std::endl;
+        std::cout << "      Values 0-7: ";
+        for (int i = 0; i < 8; i++) {
+            int8_t val = (int8_t)block_bytes[2 + i];
+            printf("%+6.3f ", val * scale);
+        }
+        std::cout << std::endl;
+
+        // Interpret as BF16 (INCORRECT - what model.cpp currently does)
+        std::cout << "\n  BF16 interpretation (INCORRECT - what model.cpp does):" << std::endl;
+        std::cout << "    First 8 values as BF16:" << std::endl;
+        for (int i = 0; i < 8; i++) {
+            uint16_t bf16_val = (uint16_t)(block_bytes[i * 2] | (block_bytes[i * 2 + 1] << 8));
+            uint32_t val32 = (uint32_t)bf16_val << 16;
+            float fresult;
+            std::memcpy(&fresult, &val32, sizeof(float));
+            printf("      BF16[%d] = 0x%04X -> %+6.3f\n", i, bf16_val, fresult);
+        }
+
+        fclose(gguf.fp);
+        std::cout << "\n  Q8_0_ALT file analysis complete" << std::endl;
+        return 0;
+
+    } catch (const std::exception& e) {
+        std::cerr << "  Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 // Test layer index extraction logic
 int test_layer_idx_extraction() {
     print_test_header("test_layer_idx_extraction");
@@ -286,7 +388,7 @@ int test_transpose_operation() {
     return 0;
 }
 
-int run_gguf_loader_tests() {
+int run_gguf_loader_tests(const char* gguf_path = nullptr) {
     std::cout << "\n========================================" << std::endl;
     std::cout << "Running GGUF Loader Tests" << std::endl;
     std::cout << "========================================" << std::endl;
@@ -301,6 +403,7 @@ int run_gguf_loader_tests() {
     result |= test_layer_idx_extraction();
     result |= test_transpose_detection();
     result |= test_transpose_operation();
+    result |= test_q80_alt_actual_file(gguf_path);
 
     std::cout << "\n========================================" << std::endl;
     if (result == 0) {
