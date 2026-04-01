@@ -509,6 +509,9 @@ std::vector<float> GPT2Model::forward(
     struct ggml_tensor* inp_tokens = ggml_graph_get_tensor(gf_, "inp_tokens");
     if (inp_tokens) {
         ggml_backend_tensor_set(inp_tokens, input_ids.data(), 0, seq_len * sizeof(int32_t));
+        std::cout << "[DEBUG] Set inp_tokens, seq_len=" << seq_len << std::endl;
+    } else {
+        std::cerr << "[ERROR] inp_tokens not found in graph!" << std::endl;
     }
 
     struct ggml_tensor* pos_tensor = ggml_graph_get_tensor(gf_, "position");
@@ -540,6 +543,32 @@ std::vector<float> GPT2Model::forward(
         // logits_out: ne[0]=VOCAB_SIZE, ne[1]=seq_len
         // Get the last token's logits
         ggml_backend_tensor_get(logits_out, logits.data(), (seq_len - 1) * VOCAB_SIZE * sizeof(float), VOCAB_SIZE * sizeof(float));
+        
+        // Debug: check logits
+        float logit_sum = 0, logit_max = -1e30, logit_min = 1e30;
+        int nan_count = 0;
+        for (int i = 0; i < VOCAB_SIZE; i++) {
+            logit_sum += logits[i];
+            if (logits[i] > logit_max) logit_max = logits[i];
+            if (logits[i] < logit_min) logit_min = logits[i];
+            if (std::isnan(logits[i]) || std::isinf(logits[i])) nan_count++;
+        }
+        std::cout << "[DEBUG] Logits: sum=" << logit_sum << " max=" << logit_max << " min=" << logit_min << " nan=" << nan_count << std::endl;
+        
+        // Print top 5 logits
+        std::vector<std::pair<float, int>> top_logits;
+        for (int i = 0; i < VOCAB_SIZE; i++) {
+            top_logits.push_back({logits[i], i});
+        }
+        std::partial_sort(top_logits.begin(), top_logits.begin() + 5, top_logits.end(),
+                         [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::cout << "[DEBUG] Top 5 logits: ";
+        for (int i = 0; i < 5; i++) {
+            std::cout << "token=" << top_logits[i].second << " logit=" << top_logits[i].first << " ";
+        }
+        std::cout << std::endl;
+    } else {
+        std::cerr << "[ERROR] logits tensor not found in graph!" << std::endl;
     }
 
     // Free the temporary context
