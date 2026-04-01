@@ -311,32 +311,9 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                 size_t expected_nbytes = ggml_nbytes(dst);
                 size_t actual_nbytes = gguf_tensor_nbytes(t);
 
-                // GGUF stores tensors as [rows, cols] in row-major format
-                // GGML 2D tensors store as [cols, rows] conceptually but are addressed by ne[]
-                // For ggml_mul_mat: W.ne[0] must match X.ne[0]
-                //
-                // Key insight: For a GGML 2D tensor with ne=(A,B):
-                //   - ne[0]=A is rows, ne[1]=B is cols in GGML addressing
-                //   - But row-major interpretation is (B, A) because column-major storage!
-                //   - When GGUF [rows, cols] matches GGML ne[], the data is already compatible!
-                //
-                // Only transpose when GGUF [rows, cols] matches GGML ne SWAPPED (B, A),
-                // meaning the conversion script explicitly transposed this weight.
-                bool needs_transpose = false;
-                if (t.n_dims == 2) {
-                    if (t.dims[0] == (uint64_t)dst->ne[1] && t.dims[1] == (uint64_t)dst->ne[0]) {
-                        // Case 1: GGUF [B,A] matches GGML ne[0]=A, ne[1]=B
-                        // GGUF [B,A] in row-major = (B,A) matrix = GGML (ne[0], ne[1]) = (A,B) matrix
-                        // But we need (B,A) matrix for ggml_mul_mat, so transpose needed
-                        // This happens when conversion script transposed the weight
-                        needs_transpose = true;
-                    }
-                    // Case 2: GGUF [A,B] matches GGML ne[0]=A, ne[1]=B
-                    // GGUF [A,B] in row-major = (A,B) matrix = GGML (ne[1], ne[0]) matrix
-                    // For ggml_mul_mat compatibility: we need (B,A) matrix
-                    // But if GGUF already matches ne directly, data is in correct layout - NO transpose
-                    // If neither condition matches, dimensions don't align - don't transpose
-                }
+                // GGUF row-major [R, C] and GGML column-major [C, R] have the SAME flat memory layout.
+                // Element (r, c) is at index r*C+c in both formats.
+                // No transpose needed — direct memcpy is correct.
 
                 if (expected_nbytes == actual_nbytes || t.type == GGUF_TID_Q4_K || t.type == GGUF_TID_Q8_0_ALT || t.type == GGUF_TID_BF16 || t.type == GGUF_TID_F16) {
                     
@@ -396,20 +373,7 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                     
                     if (read_success) {
                         auto* dst_ptr = (float*)dst->data;
-                        if (needs_transpose) {
-                            // File stores tensor as (t.dims[0]=rows, t.dims[1]=cols) in row-major
-                            // dst has shape (dst->ne[0]=cols, dst->ne[1]=rows) - already swapped
-                            // Element [r, c] from file goes to [c, r] in dst
-                            int rows = (int)t.dims[0];
-                            int cols = (int)t.dims[1];
-                            for (int r = 0; r < rows; r++) {
-                                for (int c = 0; c < cols; c++) {
-                                    dst_ptr[c * rows + r] = buffer_f[r * cols + c];
-                                }
-                            }
-                        } else {
-                            std::memcpy(dst_ptr, buffer_f.data(), buffer_f.size() * sizeof(float));
-                        }
+                        std::memcpy(dst_ptr, buffer_f.data(), buffer_f.size() * sizeof(float));
                     }
                 } else {
                     std::cout << "  Size mismatch for '" << t.name << "': expected " << expected_nbytes << " got " << actual_nbytes << std::endl;
