@@ -12,6 +12,9 @@
 GPT2Model::GPT2Model()
     : ctx_(nullptr)
     , gf_(nullptr)
+    , backend_(nullptr)
+    , allocr_(nullptr)
+    , buffer_w_(nullptr)
     , use_gpu_(false)
     , wte_(nullptr)
     , wpe_(nullptr)
@@ -32,16 +35,56 @@ GPT2Model::~GPT2Model() {
     if (logits_data_) {
         delete[] logits_data_;
     }
+    if (allocr_) {
+        ggml_gallocr_free(allocr_);
+    }
+    if (buffer_w_) {
+        ggml_backend_buffer_free(buffer_w_);
+    }
+    if (backend_) {
+        ggml_backend_free(backend_);
+    }
 }
 
 bool GPT2Model::init(bool use_gpu) {
     use_gpu_ = use_gpu;
 
-    // Initialize GGML
+    // Initialize the backend first
+    backend_ = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+    if (!backend_) {
+        std::cerr << "Failed to initialize GGML backend" << std::endl;
+        return false;
+    }
+
+    // Calculate weight buffer size
+    size_t buffer_size = 0;
+    buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // ln_f_gamma
+    buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // ln_f_beta
+    buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD * VOCAB_SIZE); // wte
+    buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD * CONTEXT_LENGTH); // wpe
+    buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD * VOCAB_SIZE); // lm_head (tied to wte)
+
+    for (int i = 0; i < N_LAYERS; i++) {
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // ln1_gamma
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // ln1_beta
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // ln2_gamma
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // ln2_beta
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD * 3 * N_EMBD); // c_attn_weight
+        buffer_size += ggml_row_size(GGML_TYPE_F32, 3 * N_EMBD); // c_attn_bias
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD * N_EMBD); // c_proj_weight
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // c_proj_bias
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD * N_FFN); // c_fc_weight
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_FFN); // c_fc_bias
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_FFN * N_EMBD); // c_proj_weight
+        buffer_size += ggml_row_size(GGML_TYPE_F32, N_EMBD); // c_proj_bias
+    }
+    buffer_size += (6 + 12 * N_LAYERS) * 128; // alignment overhead
+
+    // Initialize GGML context with no_alloc=true
     struct ggml_init_params params = {
-        .mem_size   = static_cast<size_t>(1024) * 1024 * 1024,  // 1 GB
+        .mem_size   = ggml_tensor_overhead() * (2 + 6 + 12 * N_LAYERS),
         .mem_buffer = nullptr,
-        .no_alloc   = false,
+        .no_alloc   = true,
     };
 
     ctx_ = ggml_init(params);
@@ -50,6 +93,9 @@ bool GPT2Model::init(bool use_gpu) {
         return false;
     }
 
+    // Allocate weight buffer
+    buffer_w_ = ggml_backend_alloc_buffer(backend_, buffer_size);
+
     // Initialize KV cache
     kv_cache_.init(ctx_);
 
@@ -57,23 +103,26 @@ bool GPT2Model::init(bool use_gpu) {
     // wte: (VOCAB_SIZE, N_EMBD) = (50257, 768)
     wte_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, VOCAB_SIZE);
     ggml_set_name(wte_, "wte");
-    memset(wte_->data, 0, ggml_nbytes(wte_));
 
     // wpe: (CONTEXT_LENGTH, N_EMBD) = (1024, 768)
     wpe_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, CONTEXT_LENGTH);
     ggml_set_name(wpe_, "wpe");
-    memset(wpe_->data, 0, ggml_nbytes(wpe_));
 
     // Final layer norm gamma and beta
     ln_f_.gamma = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
     ln_f_.beta = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
     ggml_set_name(ln_f_.gamma, "ln_f_gamma");
     ggml_set_name(ln_f_.beta, "ln_f_beta");
-    memset(ln_f_.gamma->data, 0, ggml_nbytes(ln_f_.gamma));
-    memset(ln_f_.beta->data, 0, ggml_nbytes(ln_f_.beta));
 
     // LM head (tied to wte)
     lm_head_ = wte_;  // Tie weights
+
+    // Allocate weight tensors into buffer
+    ggml_tallocr alloc = ggml_tallocr_new(buffer_w_);
+    ggml_tallocr_alloc(&alloc, wte_);
+    ggml_tallocr_alloc(&alloc, wpe_);
+    ggml_tallocr_alloc(&alloc, ln_f_.gamma);
+    ggml_tallocr_alloc(&alloc, ln_f_.beta);
 
     // Initialize transformer layers
     for (int i = 0; i < N_LAYERS; i++) {
@@ -82,14 +131,10 @@ bool GPT2Model::init(bool use_gpu) {
         layers_[i].ln1.beta = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
         ggml_set_name(layers_[i].ln1.gamma, ("ln1_gamma_" + std::to_string(i)).c_str());
         ggml_set_name(layers_[i].ln1.beta, ("ln1_beta_" + std::to_string(i)).c_str());
-        memset(layers_[i].ln1.gamma->data, 0, ggml_nbytes(layers_[i].ln1.gamma));
-        memset(layers_[i].ln1.beta->data, 0, ggml_nbytes(layers_[i].ln1.beta));
 
         // Attention weights
-        // c_attn_weight: (3 * N_EMBD, N_EMBD) = (3840, 1280)
         layers_[i].attention.c_attn_weight = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, 3 * N_EMBD);
         layers_[i].attention.c_attn_bias = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, 3 * N_EMBD);
-        // c_proj_weight: (N_EMBD, N_EMBD) = (1280, 1280)
         layers_[i].attention.c_proj_weight = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, N_EMBD);
         layers_[i].attention.c_proj_bias = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
 
@@ -98,27 +143,15 @@ bool GPT2Model::init(bool use_gpu) {
         ggml_set_name(layers_[i].attention.c_proj_weight, ("attn_c_proj_weight_" + std::to_string(i)).c_str());
         ggml_set_name(layers_[i].attention.c_proj_bias, ("attn_c_proj_bias_" + std::to_string(i)).c_str());
 
-        memset(layers_[i].attention.c_attn_weight->data, 0, ggml_nbytes(layers_[i].attention.c_attn_weight));
-        memset(layers_[i].attention.c_attn_bias->data, 0, ggml_nbytes(layers_[i].attention.c_attn_bias));
-        memset(layers_[i].attention.c_proj_weight->data, 0, ggml_nbytes(layers_[i].attention.c_proj_weight));
-        memset(layers_[i].attention.c_proj_bias->data, 0, ggml_nbytes(layers_[i].attention.c_proj_bias));
-
-        // Initialize KV cache for this layer (disabled for now)
-        // layers_[i].attention.init_cache(ctx_);
-
         // LayerNorm 2
         layers_[i].ln2.gamma = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
         layers_[i].ln2.beta = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
         ggml_set_name(layers_[i].ln2.gamma, ("ln2_gamma_" + std::to_string(i)).c_str());
         ggml_set_name(layers_[i].ln2.beta, ("ln2_beta_" + std::to_string(i)).c_str());
-        memset(layers_[i].ln2.gamma->data, 0, ggml_nbytes(layers_[i].ln2.gamma));
-        memset(layers_[i].ln2.beta->data, 0, ggml_nbytes(layers_[i].ln2.beta));
 
         // FFN weights
-        // c_fc_weight: (N_FFN, N_EMBD) = (5120, 1280)
         layers_[i].ffn.c_fc_weight = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_EMBD, N_FFN);
         layers_[i].ffn.c_fc_bias = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_FFN);
-        // c_proj_weight: (N_EMBD, N_FFN) = (1280, 5120)
         layers_[i].ffn.c_proj_weight = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, N_FFN, N_EMBD);
         layers_[i].ffn.c_proj_bias = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
 
@@ -127,11 +160,23 @@ bool GPT2Model::init(bool use_gpu) {
         ggml_set_name(layers_[i].ffn.c_proj_weight, ("ffn_c_proj_weight_" + std::to_string(i)).c_str());
         ggml_set_name(layers_[i].ffn.c_proj_bias, ("ffn_c_proj_bias_" + std::to_string(i)).c_str());
 
-        memset(layers_[i].ffn.c_fc_weight->data, 0, ggml_nbytes(layers_[i].ffn.c_fc_weight));
-        memset(layers_[i].ffn.c_fc_bias->data, 0, ggml_nbytes(layers_[i].ffn.c_fc_bias));
-        memset(layers_[i].ffn.c_proj_weight->data, 0, ggml_nbytes(layers_[i].ffn.c_proj_weight));
-        memset(layers_[i].ffn.c_proj_bias->data, 0, ggml_nbytes(layers_[i].ffn.c_proj_bias));
+        // Allocate layer tensors
+        ggml_tallocr_alloc(&alloc, layers_[i].ln1.gamma);
+        ggml_tallocr_alloc(&alloc, layers_[i].ln1.beta);
+        ggml_tallocr_alloc(&alloc, layers_[i].attention.c_attn_weight);
+        ggml_tallocr_alloc(&alloc, layers_[i].attention.c_attn_bias);
+        ggml_tallocr_alloc(&alloc, layers_[i].attention.c_proj_weight);
+        ggml_tallocr_alloc(&alloc, layers_[i].attention.c_proj_bias);
+        ggml_tallocr_alloc(&alloc, layers_[i].ln2.gamma);
+        ggml_tallocr_alloc(&alloc, layers_[i].ln2.beta);
+        ggml_tallocr_alloc(&alloc, layers_[i].ffn.c_fc_weight);
+        ggml_tallocr_alloc(&alloc, layers_[i].ffn.c_fc_bias);
+        ggml_tallocr_alloc(&alloc, layers_[i].ffn.c_proj_weight);
+        ggml_tallocr_alloc(&alloc, layers_[i].ffn.c_proj_bias);
     }
+
+    // Create graph allocator (will be used for compute graph temporary buffers)
+    allocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
 
     // Initialize logits buffer
     logits_size_ = VOCAB_SIZE;
@@ -446,68 +491,62 @@ std::vector<float> GPT2Model::forward(
         return std::vector<float>();
     }
 
+    int seq_len = (int)input_ids.size();
+
     // Allocate a temporary ggml context for this forward pass graph
     struct ggml_init_params params0 = {
-        .mem_size   = 1 * 1024 * 1024,  // tiny — just for tensor metadata/graph nodes
+        .mem_size   = ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(4096, false),
         .mem_buffer = nullptr,
-        .no_alloc   = true,              // ← required by ggml_backend_alloc_ctx_tensors
+        .no_alloc   = true,
     };
     ggml_context* ctx0 = ggml_init(params0);
 
     // Build computation graph
     build_graph(ctx0, input_ids, position, use_cache);
     
-    // [DEBUG] Track memory footprint after building the full architecture graph
-    std::cout << "[DEBUG] Forward pass (seq_len=" << input_ids.size() 
-              << ") build complete. ctx0 memory used: " 
-              << ggml_used_mem(ctx0) / (1024.0 * 1024.0) << " MB" << std::endl;
+    // Allocate the graph (this allocates temporary buffers, not weight tensors)
+    ggml_gallocr_alloc_graph(allocr_, gf_);
 
-    // Compute
-    compute(ctx0);
-
-    // Extract logits from computed tensor
-    // Get logits for the last position only
-    std::vector<float> logits(VOCAB_SIZE, 0.0f);
-
-    if (logits_tensor_) {
-        // logits_tensor_: ne[0]=VOCAB_SIZE, ne[1]=seq_len
-        // In GGML column-major: element [r, c] is at data[c * ne[0] + r]
-        // So element [vocab, seq] = data[seq * VOCAB_SIZE + vocab]
-        int seq_len = input_ids.size();
-        const float* logits_data = (const float*)logits_tensor_->data;
-        for (int v = 0; v < VOCAB_SIZE; v++) {
-            logits[v] = logits_data[(seq_len - 1) * VOCAB_SIZE + v];
-        }
-
-        // Debug: print top 5 logits and their tokens
-        std::vector<std::pair<float, int>> top_logits;
-        for (int v = 0; v < VOCAB_SIZE; v++) {
-            top_logits.push_back({logits[v], v});
-        }
-        std::partial_sort(top_logits.begin(), top_logits.begin() + 5, top_logits.end(),
-                         [](const auto& a, const auto& b) { return a.first > b.first; });
-        std::cout << "[DEBUG] Top 5 logits at seq_len=" << seq_len << ": ";
-        for (int i = 0; i < 5; i++) {
-            std::cout << "token=" << top_logits[i].second << "(" << tokenizer_.decode({top_logits[i].second}) << ") logit=" << top_logits[i].first << " ";
-        }
-        std::cout << std::endl;
+    // Set input tensors
+    struct ggml_tensor* inp_tokens = ggml_graph_get_tensor(gf_, "inp_tokens");
+    if (inp_tokens) {
+        ggml_backend_tensor_set(inp_tokens, input_ids.data(), 0, seq_len * sizeof(int32_t));
     }
 
-    // Debug: verify wte_ embedding for first token
-    {
-        const float* wte_data = (const float*)wte_->data;
-        int first_token = input_ids[0];
-        // Embedding for token t starts at data[t * ne[0]] in GGML column-major
-        const float* emb_ptr = &wte_data[first_token * N_EMBD];
-        float emb_sum = 0;
-        for (int i = 0; i < N_EMBD; i++) emb_sum += emb_ptr[i];
-        std::cout << "[DEBUG] First token=" << first_token << " embedding L1=" << emb_sum << std::endl;
+    struct ggml_tensor* pos_tensor = ggml_graph_get_tensor(gf_, "position");
+    if (pos_tensor) {
+        std::vector<int32_t> pos_ids(seq_len);
+        for (int i = 0; i < seq_len; i++) {
+            int p = position + i;
+            pos_ids[i] = (p >= CONTEXT_LENGTH) ? (CONTEXT_LENGTH - 1) : p;
+        }
+        for (int i = 0; i < seq_len; i++) {
+            int32_t v = pos_ids[i];
+            ggml_backend_tensor_set(pos_tensor, &v, i * sizeof(int32_t), sizeof(v));
+        }
+    }
+
+    // Set backend options
+    if (ggml_backend_is_cpu(backend_)) {
+        ggml_backend_cpu_set_n_threads(backend_, 4);
+    }
+
+    // Compute
+    ggml_backend_graph_compute(backend_, gf_);
+
+    // Extract logits for the last token only
+    std::vector<float> logits(VOCAB_SIZE, 0.0f);
+
+    struct ggml_tensor* logits_out = ggml_graph_get_tensor(gf_, "logits");
+    if (logits_out) {
+        // logits_out: ne[0]=VOCAB_SIZE, ne[1]=seq_len
+        // Get the last token's logits
+        ggml_backend_tensor_get(logits_out, logits.data(), (seq_len - 1) * VOCAB_SIZE * sizeof(float), VOCAB_SIZE * sizeof(float));
     }
 
     // Free the temporary context
     ggml_free(ctx0);
     gf_ = nullptr;
-    logits_tensor_ = nullptr;
 
     return logits;
 }
@@ -519,38 +558,28 @@ void GPT2Model::build_graph(
     bool use_cache
 ) {
     // Allocate a fresh computation graph within the local context ctx0
-    gf_ = ggml_new_graph(ctx0);
+    gf_ = ggml_new_graph_custom(ctx0, 4096, false);
 
     int seq_len = input_ids.size();
 
     // Build tokens tensor for row extraction
     ggml_tensor* tokens_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
-    std::memcpy(tokens_tensor->data, input_ids.data(), seq_len * sizeof(int32_t));
-
-    ggml_tensor* input_embd = ggml_get_rows(ctx0, wte_, tokens_tensor);
+    ggml_set_name(tokens_tensor, "inp_tokens");
+    ggml_set_input(tokens_tensor);
 
     // Build positional indices tensor
-    std::vector<int32_t> pos_ids(seq_len);
-    for (int i = 0; i < seq_len; i++) {
-        int p = position + i;
-        pos_ids[i] = (p >= CONTEXT_LENGTH) ? (CONTEXT_LENGTH - 1) : p;
-    }
     ggml_tensor* pos_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
-    std::memcpy(pos_tensor->data, pos_ids.data(), seq_len * sizeof(int32_t));
+    ggml_set_name(pos_tensor, "position");
+    ggml_set_input(pos_tensor);
 
-    // Get positional embeddings
+    // wte + wpe
+    ggml_tensor* input_embd = ggml_get_rows(ctx0, wte_, tokens_tensor);
     ggml_tensor* pos_embd = ggml_get_rows(ctx0, wpe_, pos_tensor);
-
     ggml_tensor* h = ggml_add(ctx0, input_embd, pos_embd);
     // h: ne[0]=N_EMBD, ne[1]=seq_len
     
-    // [DEBUG] Add log to ensure forward pass graphs compile correctly
-    // std::cout << "[DEBUG] Adding debug markers inside graph." << std::endl;
-
     // Pass through transformer layers
     for (int i = 0; i < N_LAYERS; i++) {
-        // position is the sequence position of the FIRST token in input_ids
-        // When use_cache=true and seq_len=1 (single new token), position is that token's position
         h = layers_[i].forward(ctx0, gf_, h, position, use_cache);
         ggml_build_forward_expand(gf_, h);
     }
@@ -560,25 +589,13 @@ void GPT2Model::build_graph(
     ggml_build_forward_expand(gf_, h_norm);
 
     // LM head: lm_head^T @ h_norm
-    // lm_head: ne[0]=N_EMBD, ne[1]=VOCAB_SIZE; h_norm: ne[0]=N_EMBD, ne[1]=seq_len
-    // ggml_mul_mat(lm_head, h_norm) = lm_head^T @ h_norm
     // Result: ne[0]=VOCAB_SIZE, ne[1]=seq_len
-    logits_tensor_ = ggml_mul_mat(ctx0, lm_head_, h_norm);
-    ggml_build_forward_expand(gf_, logits_tensor_);
+    ggml_tensor* logits = ggml_mul_mat(ctx0, lm_head_, h_norm);
+    ggml_set_name(logits, "logits");
+    ggml_set_output(logits);
+    ggml_build_forward_expand(gf_, logits);
 }
 
-void GPT2Model::compute(ggml_context* ctx0) {
-    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
-    if (!backend) {
-        std::cerr << "Failed to initialize GGML CPU backend" << std::endl;
-        return;
-    }
-
-    ggml_backend_alloc_ctx_tensors(ctx0, backend);
-
-    ggml_backend_graph_compute(backend, gf_);
-    ggml_backend_free(backend);
-}
 std::vector<int> GPT2Model::generate(
     const std::vector<int>& prompt_tokens,
     int max_new_tokens,

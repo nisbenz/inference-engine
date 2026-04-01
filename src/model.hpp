@@ -73,6 +73,8 @@ private:
     ggml_context* ctx_;
     ggml_cgraph* gf_;
     ggml_backend_t backend_;
+    ggml_gallocr_t allocr_;
+    ggml_backend_buffer_t buffer_w_;
     bool use_gpu_;
 
     // Model weights (stored as GGML tensors)
@@ -113,9 +115,6 @@ private:
         int position,
         bool use_cache
     );
-
-    // Actually compute the graph
-    void compute(ggml_context* ctx0);
 
     // Load weights from GGUF format
     bool load_gguf_weights(const std::string& path);
