@@ -79,3 +79,6 @@ set_target_properties(gpt2 PROPERTIES
 
 # Output directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# Build tests
+add_subdirectory(tests)

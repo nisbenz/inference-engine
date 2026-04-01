@@ -2,3 +2,4 @@
 *.gguf
 *.txt
 *.json
+/gpt-2
