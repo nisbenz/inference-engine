@@ -151,7 +151,7 @@ int test_ffn_matmul_dims() {
     print_test_header("test_ffn_matmul_dims");
 
     struct ggml_init_params params = {
-        .mem_size   = 16 * 1024 * 1024,
+        .mem_size   = 32 * 1024 * 1024,  // 32MB - needed 18.9MB
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };
