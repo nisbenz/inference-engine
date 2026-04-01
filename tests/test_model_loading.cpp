@@ -79,7 +79,7 @@ int test_ggml_tensor_creation() {
     TEST_ASSERT_MSG(wte != nullptr, "Failed to create wte tensor");
     TEST_ASSERT_INT_EQ(wte->ne[0], 768);   // First dimension
     TEST_ASSERT_INT_EQ(wte->ne[1], 50257); // Second dimension
-    TEST_ASSERT_INT_EQ(wte->n_dims, 2);
+    TEST_ASSERT_INT_EQ(ggml_n_dims(wte), 2);
     TEST_ASSERT_INT_EQ(wte->type, GGML_TYPE_F32);
 
     // Create QKV weight: (N_EMBD, 3*N_EMBD) = (768, 2304)
@@ -99,7 +99,7 @@ int test_ggml_tensor_creation() {
     // Create 1D tensor for biases
     ggml_tensor* qkv_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2304);
     TEST_ASSERT_INT_EQ(qkv_b->ne[0], 2304);
-    TEST_ASSERT_INT_EQ(qkv_b->n_dims, 1);
+    TEST_ASSERT_INT_EQ(ggml_n_dims(qkv_b), 1);
 
     ggml_free(ctx);
 

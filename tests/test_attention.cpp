@@ -156,7 +156,7 @@ int test_attention_reshape() {
     TEST_ASSERT_INT_EQ(Q->ne[0], 64);   // head_dim
     TEST_ASSERT_INT_EQ(Q->ne[1], 12);   // n_heads
     TEST_ASSERT_INT_EQ(Q->ne[2], 4);    // seq_len
-    TEST_ASSERT_INT_EQ(Q->n_dims, 3);
+    TEST_ASSERT_INT_EQ(ggml_n_dims(Q), 3);
 
     ggml_free(ctx);
 
