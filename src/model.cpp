@@ -339,21 +339,12 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                         std::cout << "  Warning: Q4_K tensor '" << t.name << "' needs dequantization, using random" << std::endl;
                         failed++;
                     } else if (t.type == GGUF_TID_Q8_0_ALT) {
-                        // Q8_0 (type 30): 2-byte scale (float16, little-endian) + 32 int8 values per block
-                        std::vector<uint8_t> qdata(actual_nbytes);
-                        read_tensor_data(gguf, t, qdata.data(), actual_nbytes);
-                        size_t n_blocks = actual_nbytes / 34;  // 2 bytes scale + 32 bytes data
-                        size_t j = 0;
-                        for (size_t b = 0; b < n_blocks; b++) {
-                            // Read scale as float16 (little-endian), convert to float
-                            uint16_t scale_f16 = (uint16_t)(qdata[b * 34] | (qdata[b * 34 + 1] << 8));
-                            float scale = fp16_to_fp32(scale_f16);
-                            // Read 32 quantized values and dequantize
-                            // Q8_0 uses symmetric quantization: value = quantized_val * scale
-                            for (int i = 0; i < 32; i++) {
-                                int8_t val = (int8_t)qdata[b * 34 + 2 + i];
-                                buffer_f[j++] = val * scale;
-                            }
+                        // Q8_0_ALT (type 30) in this GGUF file: actually stored as BF16 (2 bytes per element)
+                        // Confirmed by tensor data size: 768*2304*2 = 3,538,944 bytes
+                        std::vector<uint16_t> bf16_data(ggml_nelements(dst));
+                        read_tensor_data(gguf, t, bf16_data.data(), actual_nbytes);
+                        for (size_t j = 0; j < bf16_data.size(); j++) {
+                            buffer_f[j] = bf16_to_fp32(bf16_data[j]);
                         }
                         read_success = true;
                         loaded++;
