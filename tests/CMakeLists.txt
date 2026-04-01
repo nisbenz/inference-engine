@@ -12,6 +12,7 @@ add_executable(run_tests
     ${CMAKE_SOURCE_DIR}/src/gguf_loader.cpp
     ${CMAKE_SOURCE_DIR}/src/model.cpp
     ${CMAKE_SOURCE_DIR}/src/tokenizer.cpp
+    ${CMAKE_SOURCE_DIR}/src/kv_cache.cpp
 )
 
 # Link against GGML and pthread
