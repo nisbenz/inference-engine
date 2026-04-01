@@ -113,7 +113,7 @@ private:
     );
 
     // Actually compute the graph
-    void compute();
+    void compute(ggml_context* ctx0);
 
     // Load weights from GGUF format
     bool load_gguf_weights(const std::string& path);

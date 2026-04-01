@@ -1,6 +1,7 @@
 #include "common_test.hpp"
 #include "layers.hpp"
 #include <ggml.h>
+#include <ggml-backend.h>
 
 // Test attention configuration
 int test_attention_config() {
@@ -261,6 +262,17 @@ int test_softmax() {
     data[2] = 3.0f;
 
     ggml_tensor* result = ggml_soft_max(ctx, x);
+
+    // Build and compute graph to get actual results
+    ggml_cgraph* gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, result);
+
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+    if (backend) {
+        ggml_backend_alloc_ctx_tensors(ctx, backend);
+        ggml_backend_graph_compute(backend, gf);
+        ggml_backend_free(backend);
+    }
 
     // Softmax of [1, 2, 3] should be [0.090, 0.245, 0.665] approximately
     float* result_data = (float*)result->data;

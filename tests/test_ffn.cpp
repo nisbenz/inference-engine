@@ -23,7 +23,7 @@ int test_ffn_dimensions() {
     print_test_header("test_ffn_dimensions");
 
     struct ggml_init_params params = {
-        .mem_size   = 16 * 1024 * 1024,
+        .mem_size   = 128 * 1024 * 1024,  // 128MB - needed ~19MB
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };
@@ -145,7 +145,7 @@ int test_ffn_forward_structure() {
     print_test_header("test_ffn_forward_structure");
 
     struct ggml_init_params params = {
-        .mem_size   = 32 * 1024 * 1024,  // 32MB for larger tensors
+        .mem_size   = 128 * 1024 * 1024,  // 128MB for larger tensors
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };
@@ -230,7 +230,7 @@ int test_ffn_seq_len_preservation() {
     print_test_header("test_ffn_seq_len_preservation");
 
     struct ggml_init_params params = {
-        .mem_size   = 32 * 1024 * 1024,  // 32MB - tensors accumulate in loop
+        .mem_size   = 128 * 1024 * 1024,  // 128MB - tensors accumulate in loop
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };

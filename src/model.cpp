@@ -463,7 +463,7 @@ std::vector<float> GPT2Model::forward(
               << ggml_used_mem(ctx0) / (1024.0 * 1024.0) << " MB" << std::endl;
 
     // Compute
-    compute();
+    compute(ctx0);
 
     // Extract logits from computed tensor
     // Get logits for the last position only
@@ -567,13 +567,16 @@ void GPT2Model::build_graph(
     ggml_build_forward_expand(gf_, logits_tensor_);
 }
 
-void GPT2Model::compute() {
+void GPT2Model::compute(ggml_context* ctx0) {
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
 
     if (!backend) {
         std::cerr << "Failed to initialize GGML CPU backend" << std::endl;
         return;
     }
+
+    ggml_backend_alloc_ctx_tensors(ctx0, backend);
+    ggml_backend_alloc_ctx_tensors(ctx_, backend);
 
     ggml_backend_graph_compute(backend, gf_);
     ggml_backend_free(backend);
