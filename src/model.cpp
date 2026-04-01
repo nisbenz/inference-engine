@@ -502,8 +502,12 @@ std::vector<float> GPT2Model::forward(
     // Build computation graph
     build_graph(ctx0, input_ids, position, use_cache);
     
-    // Allocate the graph (this allocates temporary buffers, not weight tensors)
-    ggml_gallocr_alloc_graph(allocr_, gf_);
+    // Create a fresh graph allocator for this forward pass
+    // (graph structure changes with seq_len, so we can't reuse the allocator)
+    ggml_gallocr_t alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
+    
+    // Allocate the graph
+    ggml_gallocr_alloc_graph(alloc, gf_);
 
     // Set input tensors
     struct ggml_tensor* inp_tokens = ggml_graph_get_tensor(gf_, "inp_tokens");
@@ -571,7 +575,8 @@ std::vector<float> GPT2Model::forward(
         std::cerr << "[ERROR] logits tensor not found in graph!" << std::endl;
     }
 
-    // Free the temporary context
+    // Free the temporary context and allocator
+    ggml_gallocr_free(alloc);
     ggml_free(ctx0);
     gf_ = nullptr;
 
