@@ -87,7 +87,7 @@ int test_simple_matmul() {
     TEST_ASSERT_MSG(backend != nullptr, "Failed to init backend");
 
     ggml_tensor* W = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2);
-    ggml_tensor* x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, 3);
+    ggml_tensor* x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 1);
 
     std::cout << "  W: ne[0]=" << W->ne[0] << " ne[1]=" << W->ne[1] << std::endl;
     std::cout << "  x: ne[0]=" << x->ne[0] << " ne[1]=" << x->ne[1] << std::endl;
