@@ -16,10 +16,6 @@ void KVCacheEntry::init(ggml_context* ctx, int n_heads, int head_dim, int max_se
     ggml_set_name(k, "k_cache");
     ggml_set_name(v, "v_cache");
 
-    // Zero out the cache
-    memset(k->data, 0, ggml_nbytes(k));
-    memset(v->data, 0, ggml_nbytes(v));
-
     current_length = 0;
 }
 

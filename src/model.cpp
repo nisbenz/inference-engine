@@ -29,9 +29,6 @@ GPT2Model::~GPT2Model() {
     if (ctx_) {
         ggml_free(ctx_);
     }
-    if (backend_) {
-        ggml_backend_free(backend_);
-    }
     if (logits_data_) {
         delete[] logits_data_;
     }
@@ -44,7 +41,7 @@ bool GPT2Model::init(bool use_gpu) {
     struct ggml_init_params params = {
         .mem_size   = static_cast<size_t>(1024) * 1024 * 1024,  // 1 GB
         .mem_buffer = nullptr,
-        .no_alloc   = true, // Backend logic requires allocation AFTER tensor declarations
+        .no_alloc   = false,
     };
 
     ctx_ = ggml_init(params);
@@ -126,31 +123,10 @@ bool GPT2Model::init(bool use_gpu) {
         layers_[i].ffn.c_proj_bias = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, N_EMBD);
 
         ggml_set_name(layers_[i].ffn.c_fc_weight, ("ffn_c_fc_weight_" + std::to_string(i)).c_str());
+        ggml_set_name(layers_[i].ffn.c_fc_bias, ("ffn_c_fc_bias_" + std::to_string(i)).c_str());
         ggml_set_name(layers_[i].ffn.c_proj_weight, ("ffn_c_proj_weight_" + std::to_string(i)).c_str());
         ggml_set_name(layers_[i].ffn.c_proj_bias, ("ffn_c_proj_bias_" + std::to_string(i)).c_str());
-    }
 
-    // Allocate context tensors to backend
-    if (!backend_) {
-        backend_ = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
-    }
-    ggml_backend_alloc_ctx_tensors(ctx_, backend_);
-
-    // Initialize tensor buffers AFTER allocation
-    memset(wte_->data, 0, ggml_nbytes(wte_));
-    memset(wpe_->data, 0, ggml_nbytes(wpe_));
-    memset(ln_f_.gamma->data, 0, ggml_nbytes(ln_f_.gamma));
-    memset(ln_f_.beta->data, 0, ggml_nbytes(ln_f_.beta));
-
-    for (int i = 0; i < N_LAYERS; i++) {
-        memset(layers_[i].ln1.gamma->data, 0, ggml_nbytes(layers_[i].ln1.gamma));
-        memset(layers_[i].ln1.beta->data, 0, ggml_nbytes(layers_[i].ln1.beta));
-        memset(layers_[i].attention.c_attn_weight->data, 0, ggml_nbytes(layers_[i].attention.c_attn_weight));
-        memset(layers_[i].attention.c_attn_bias->data, 0, ggml_nbytes(layers_[i].attention.c_attn_bias));
-        memset(layers_[i].attention.c_proj_weight->data, 0, ggml_nbytes(layers_[i].attention.c_proj_weight));
-        memset(layers_[i].attention.c_proj_bias->data, 0, ggml_nbytes(layers_[i].attention.c_proj_bias));
-        memset(layers_[i].ln2.gamma->data, 0, ggml_nbytes(layers_[i].ln2.gamma));
-        memset(layers_[i].ln2.beta->data, 0, ggml_nbytes(layers_[i].ln2.beta));
         memset(layers_[i].ffn.c_fc_weight->data, 0, ggml_nbytes(layers_[i].ffn.c_fc_weight));
         memset(layers_[i].ffn.c_fc_bias->data, 0, ggml_nbytes(layers_[i].ffn.c_fc_bias));
         memset(layers_[i].ffn.c_proj_weight->data, 0, ggml_nbytes(layers_[i].ffn.c_proj_weight));
@@ -474,25 +450,12 @@ std::vector<float> GPT2Model::forward(
     struct ggml_init_params params0 = {
         .mem_size   = 256 * 1024 * 1024,  // 256 MB for the compute graph
         .mem_buffer = nullptr,
-        .no_alloc   = true, // Must allocate via backend
+        .no_alloc   = false,
     };
     ggml_context* ctx0 = ggml_init(params0);
 
     // Build computation graph
     build_graph(ctx0, input_ids, position, use_cache);
-
-    // Allocate intermediate graph tensors
-    ggml_backend_alloc_ctx_tensors(ctx0, backend_);
-
-    // Populate data for input tensors AFTER backend allocation
-    std::memcpy(input_ids_tensor_->data, input_ids.data(), input_ids.size() * sizeof(int32_t));
-    
-    std::vector<int32_t> pos_ids(input_ids.size());
-    for (size_t i = 0; i < input_ids.size(); i++) {
-        int p = position + i;
-        pos_ids[i] = (p >= CONTEXT_LENGTH) ? (CONTEXT_LENGTH - 1) : p;
-    }
-    std::memcpy(position_tensor_->data, pos_ids.data(), pos_ids.size() * sizeof(int32_t));
     
     // [DEBUG] Track memory footprint after building the full architecture graph
     std::cout << "[DEBUG] Forward pass (seq_len=" << input_ids.size() 
@@ -562,13 +525,18 @@ void GPT2Model::build_graph(
 
     // Build tokens tensor for row extraction
     ggml_tensor* tokens_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
-    input_ids_tensor_ = tokens_tensor;
+    std::memcpy(tokens_tensor->data, input_ids.data(), seq_len * sizeof(int32_t));
 
     ggml_tensor* input_embd = ggml_get_rows(ctx0, wte_, tokens_tensor);
 
     // Build positional indices tensor
+    std::vector<int32_t> pos_ids(seq_len);
+    for (int i = 0; i < seq_len; i++) {
+        int p = position + i;
+        pos_ids[i] = (p >= CONTEXT_LENGTH) ? (CONTEXT_LENGTH - 1) : p;
+    }
     ggml_tensor* pos_tensor = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, seq_len);
-    position_tensor_ = pos_tensor;
+    std::memcpy(pos_tensor->data, pos_ids.data(), seq_len * sizeof(int32_t));
 
     // Get positional embeddings
     ggml_tensor* pos_embd = ggml_get_rows(ctx0, wpe_, pos_tensor);
@@ -600,12 +568,17 @@ void GPT2Model::build_graph(
 }
 
 void GPT2Model::compute(ggml_context* ctx0) {
-    if (!backend_) {
-        std::cerr << "Engine backend is not initialized!" << std::endl;
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+
+    if (!backend) {
+        std::cerr << "Failed to initialize GGML CPU backend" << std::endl;
         return;
     }
 
-    ggml_backend_graph_compute(backend_, gf_);
+    ggml_backend_alloc_ctx_tensors(ctx0, backend);
+
+    ggml_backend_graph_compute(backend, gf_);
+    ggml_backend_free(backend);
 }
 
 std::vector<int> GPT2Model::generate(
@@ -623,7 +596,11 @@ std::vector<int> GPT2Model::generate(
     while ((int)tokens.size() < (int)prompt_tokens.size() + max_new_tokens) {
 
         // Forward pass with full sequence, disable cache
-        std::vector<float> logits = forward(tokens, 0, false);
+        // Trim to last CONTEXT_LENGTH tokens if needed
+        std::vector<int> window(tokens);
+        if ((int)window.size() > CONTEXT_LENGTH)
+            window = std::vector<int>(tokens.end() - CONTEXT_LENGTH, tokens.end());
+        std::vector<float> logits = forward(window, 0, false);
 
         // Sample next token (use logits directly - they correspond to the single token)
         int next_token = sample(logits, temperature, top_k);
