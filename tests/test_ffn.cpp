@@ -194,7 +194,7 @@ int test_ffn_weight_shapes() {
     print_test_header("test_ffn_weight_shapes");
 
     struct ggml_init_params params = {
-        .mem_size   = 16 * 1024 * 1024,
+        .mem_size   = 64 * 1024 * 1024,
         .mem_buffer = nullptr,
         .no_alloc   = false,
     };
