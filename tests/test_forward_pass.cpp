@@ -14,8 +14,8 @@ static void compute_graph(ggml_context* ctx, ggml_backend_t backend, ggml_tensor
 }
 
 // Test 1: Identity LayerNorm - verify normalization is correct
-int test_layernorm_identity() {
-    print_test_header("test_layernorm_identity");
+int test_forward_layernorm_identity() {
+    print_test_header("test_forward_layernorm_identity");
 
     struct ggml_init_params params = {
         .mem_size   = 32 * 1024 * 1024,
@@ -166,8 +166,8 @@ int test_layernorm_known_values() {
 }
 
 // Test 4: Check attention mask with causal attention
-int test_causal_mask() {
-    print_test_header("test_causal_mask");
+int test_forward_causal_mask() {
+    print_test_header("test_forward_causal_mask");
 
     struct ggml_init_params params = {
         .mem_size   = 32 * 1024 * 1024,
@@ -276,8 +276,8 @@ int test_softmax_attention() {
 }
 
 // Test 6: GELU activation function
-int test_gelu_activation() {
-    print_test_header("test_gelu_activation");
+int test_forward_gelu_activation() {
+    print_test_header("test_forward_gelu_activation");
 
     struct ggml_init_params params = {
         .mem_size   = 32 * 1024 * 1024,
@@ -529,8 +529,8 @@ int test_ggml_layout() {
 }
 
 // Test 9: Embedding lookup with ggml_get_rows
-int test_embedding_lookup() {
-    print_test_header("test_embedding_lookup");
+int test_forward_embedding_lookup() {
+    print_test_header("test_forward_embedding_lookup");
 
     struct ggml_init_params params = {
         .mem_size   = 32 * 1024 * 1024,
@@ -618,15 +618,15 @@ int run_forward_pass_tests() {
     std::cout << "========================================" << std::endl;
 
     int result = 0;
-    result |= test_layernorm_identity();
+    result |= test_forward_layernorm_identity();
     result |= test_simple_matmul();
     result |= test_layernorm_known_values();
-    result |= test_causal_mask();
+    result |= test_forward_causal_mask();
     result |= test_softmax_attention();
-    result |= test_gelu_activation();
+    result |= test_forward_gelu_activation();
     result |= test_single_layer_forward();
     result |= test_ggml_layout();
-    result |= test_embedding_lookup();
+    result |= test_forward_embedding_lookup();
 
     std::cout << "\n========================================" << std::endl;
     if (result == 0) {
