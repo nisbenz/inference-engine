@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
     float temperature = (argc > 3) ? std::stof(argv[3]) : 1.0f;
     int top_k = (argc > 4) ? std::stoi(argv[4]) : 50;
 
-    std::cout << "=== GPT-2 Large Inference ===" << std::endl;
+    std::cout << "=== GPT-2  Inference ===" << std::endl;
     std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
     std::cout << "Max tokens: " << max_tokens << std::endl;
     std::cout << "Temperature: " << temperature << std::endl;
