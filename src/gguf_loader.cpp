@@ -110,6 +110,21 @@ GGUFFile load_gguf(const char* path) {
     }
     uint32_t align = gguf.get_u32_or("general.alignment", 32);
     gguf.tensor_data_offset = (ftell(fp) + align - 1) & ~(uint64_t)(align - 1);
+
+    fseek(fp, 0, SEEK_END);
+    const uint64_t file_size = (uint64_t)ftell(fp);
+    const uint64_t tensor_data_end = file_size;
+    for (uint64_t i = 0; i < gguf.tensor_count; i++) {
+        const uint64_t next_offset = (i + 1 < gguf.tensor_count)
+            ? gguf.tensors[i + 1].offset
+            : (tensor_data_end - gguf.tensor_data_offset);
+        if (next_offset < gguf.tensors[i].offset) {
+            throw std::runtime_error("GGUF: tensor offsets are not monotonic");
+        }
+        gguf.tensors[i].data_size = next_offset - gguf.tensors[i].offset;
+    }
+
+    fseek(fp, (long)gguf.tensor_data_offset, SEEK_SET);
     return gguf;
 }
 

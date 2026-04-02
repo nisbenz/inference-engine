@@ -78,6 +78,7 @@ struct GGUFTensorInfo {
     uint64_t dims[4];
     GGUF_TYPE_ID type;
     uint64_t offset;
+    uint64_t data_size = 0;
 };
 
 // GGUF File handle

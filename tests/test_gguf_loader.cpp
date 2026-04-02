@@ -95,12 +95,14 @@ int test_tensor_info_structure() {
     info.dims[1] = 3072;
     info.type = GGUF_TID_F32;
     info.offset = 0;
+    info.data_size = 0;
 
     TEST_ASSERT_MSG(info.name == "test.tensor", "Tensor name mismatch");
     TEST_ASSERT_INT_EQ(info.n_dims, 2);
     TEST_ASSERT_INT_EQ(info.dims[0], 768);
     TEST_ASSERT_INT_EQ(info.dims[1], 3072);
     TEST_ASSERT_INT_EQ(info.type, GGUF_TID_F32);
+    TEST_ASSERT_INT_EQ(info.data_size, 0);
 
     std::cout << "  Tensor info structure verified" << std::endl;
     return 0;
@@ -388,6 +390,53 @@ int test_transpose_operation() {
     return 0;
 }
 
+int test_actual_tensor_data_size(const char* gguf_path) {
+    print_test_header("test_actual_tensor_data_size");
+
+    if (!gguf_path) {
+        std::cout << "  No GGUF path provided, skipping" << std::endl;
+        return 0;
+    }
+
+    try {
+        GGUFFile gguf = load_gguf(gguf_path);
+
+        GGUFTensorInfo* wte_info = nullptr;
+        for (auto& t : gguf.tensors) {
+            if (t.name == "token_embd.weight") {
+                wte_info = &t;
+                break;
+            }
+        }
+
+        if (!wte_info) {
+            std::cerr << "  ERROR: token_embd.weight not found!" << std::endl;
+            fclose(gguf.fp);
+            return 1;
+        }
+
+        const size_t n_elements = wte_info->dims[0] * wte_info->dims[1];
+        const size_t declared_nbytes = gguf_tensor_nbytes(*wte_info);
+        const size_t actual_nbytes = (size_t) wte_info->data_size;
+        const size_t expected_bf16_bytes = n_elements * sizeof(uint16_t);
+
+        std::cout << "  token_embd.weight declared bytes: " << declared_nbytes << std::endl;
+        std::cout << "  token_embd.weight actual bytes:   " << actual_nbytes << std::endl;
+        std::cout << "  token_embd.weight BF16 bytes:     " << expected_bf16_bytes << std::endl;
+
+        TEST_ASSERT_MSG(actual_nbytes != declared_nbytes,
+            "Actual tensor byte span should differ from nominal Q8_0_ALT block math");
+        TEST_ASSERT_SIZE_T_EQ(actual_nbytes, expected_bf16_bytes);
+
+        fclose(gguf.fp);
+        std::cout << "  Actual tensor byte span verified" << std::endl;
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "  Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 int run_gguf_loader_tests(const char* gguf_path = nullptr) {
     std::cout << "\n========================================" << std::endl;
     std::cout << "Running GGUF Loader Tests" << std::endl;
@@ -404,6 +453,7 @@ int run_gguf_loader_tests(const char* gguf_path = nullptr) {
     result |= test_transpose_detection();
     result |= test_transpose_operation();
     result |= test_q80_alt_actual_file(gguf_path);
+    result |= test_actual_tensor_data_size(gguf_path);
 
     std::cout << "\n========================================" << std::endl;
     if (result == 0) {

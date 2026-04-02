@@ -309,7 +309,7 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
             if (dst) {
                 // Calculate expected size
                 size_t expected_nbytes = ggml_nbytes(dst);
-                size_t actual_nbytes = gguf_tensor_nbytes(t);
+                size_t actual_nbytes = t.data_size ? (size_t)t.data_size : gguf_tensor_nbytes(t);
 
                 // GGUF row-major [R, C] and GGML column-major [C, R] have the SAME flat memory layout.
                 // Element (r, c) is at index r*C+c in both formats.
@@ -339,15 +339,22 @@ bool GPT2Model::load_gguf_weights(const std::string& path) {
                         std::cout << "  Warning: Q4_K tensor '" << t.name << "' needs dequantization, using random" << std::endl;
                         failed++;
                     } else if (t.type == GGUF_TID_Q8_0_ALT) {
-                        // Q8_0_ALT (type 30) in this GGUF file: actually stored as BF16 (2 bytes per element)
-                        // Confirmed by tensor data size: 768*2304*2 = 3,538,944 bytes
-                        std::vector<uint16_t> bf16_data(ggml_nelements(dst));
-                        read_tensor_data(gguf, t, bf16_data.data(), actual_nbytes);
-                        for (size_t j = 0; j < bf16_data.size(); j++) {
-                            buffer_f[j] = bf16_to_fp32(bf16_data[j]);
+                        const size_t bf16_nbytes = ggml_nelements(dst) * sizeof(uint16_t);
+                        if (actual_nbytes == bf16_nbytes) {
+                            // Some converters tag BF16 payloads as Q8_0_ALT. Detect by actual on-disk size.
+                            std::vector<uint16_t> bf16_data(ggml_nelements(dst));
+                            read_tensor_data(gguf, t, bf16_data.data(), actual_nbytes);
+                            for (size_t j = 0; j < bf16_data.size(); j++) {
+                                buffer_f[j] = bf16_to_fp32(bf16_data[j]);
+                            }
+                            read_success = true;
+                            loaded++;
+                        } else {
+                            std::cout << "  Warning: Q8_0_ALT tensor '" << t.name
+                                      << "' uses unsupported packed size " << actual_nbytes
+                                      << " bytes (expected BF16-sized " << bf16_nbytes << ")" << std::endl;
+                            failed++;
                         }
-                        read_success = true;
-                        loaded++;
                     } else if (t.type == GGUF_TID_BF16) {
                         // BF16 type - convert to F32
                         std::vector<uint16_t> bf16_data(actual_nbytes / 2);
